@@ -13,3 +13,10 @@
 #
 # Author: Yu Zhang <zhy@lanl.gov>
 #
+
+r"""
+A collection of linerar and nonlinear solvers
+=============================================
+
+"""
+
