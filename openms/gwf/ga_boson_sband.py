@@ -230,7 +230,6 @@ def kernel(
     # initial fock matrix
     init_fock = ga.update_qp_ham()
     print('initial fock matrix is', init_fock)
-    st()
 
     # initialize dm0
     if dm0 is None:
@@ -275,6 +274,7 @@ def kernel(
 
         # update var_params (f, or phi) and lambda
         ga.update_var_params(dm)
+        st()
         err = ga.update_lambda(dm)
         delta_f = fold - ga.f
 
@@ -488,7 +488,7 @@ class GASCF(lib.StreamObject): # (hf.RHF):
         n0 = backend.diagonal(dm)
         self.f[0] = 1.0 - n0
         self.f[1] = backend.sqrt(n0 * (1.0 - n0))
-        self.f[2] = n0;
+        self.f[2] = n0
 
     def get_bare_hcore(self, mol=None, dm=None):
         r"""One-body integral of hopping term
@@ -642,7 +642,6 @@ class GASCF(lib.StreamObject): # (hf.RHF):
 
         if R is None: R = self.R
         if lamda is None: lamda = self.lamda
-        st()
 
         ham = numpy.zeros((self.nao, self.nao))
         numpy.fill_diagonal(ham, lamda)

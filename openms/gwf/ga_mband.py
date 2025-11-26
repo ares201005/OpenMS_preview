@@ -58,7 +58,6 @@ class GASCF(lib.StreamObject):
         # initialize renormalizations and Lagrange multipliers
         # how to get initial guess?
         self.R = np.broadcast_to(np.eye(M), (N, M, M)).copy()
-        self.D = np.zeros((N, M, M))
         self.Lc = np.zeros((N, M, M))
         self.L = np.zeros((M, M))
 
@@ -80,6 +79,32 @@ class GASCF(lib.StreamObject):
     
     def _get_tt(self, I, J):
         return self.t[I, J]
+
+    def _get_annahilation_operators(self):
+        M = self.M
+        C = np.zeros((M, 2**M, 2**M))
+        for i in range(M):
+            for state in range(2**M):
+                if (state & (1 << i)):
+                    C[i, state & ~(1 << i), state] = (-1)**(bin(state >> (i+1)).count('1'))
+        return C
+    
+    def _update_renormalizations(self):
+        C = self._get_annahilation_operators()
+        for I in range(self.N):
+            # get local state and correlation
+            M = self.M
+            Delta = self.C[I, I]
+            mat = scipy.linalg.sqrtm(np.linalg.inv(Delta @ (np.eye(M) - Delta)))
+            phi = self.phi[I]
+
+            # compute R
+            opmat = np.zeros((M, M))
+            for alpha in range(M):
+                for b in range(M):
+                    opmat[alpha, b] = phi.conj().T @ (np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[b])) @ phi
+            self.R[I] = np.clip(opmat @ mat, None, 1.0) # prevent the R larger than 1.0
+            
     
     def _update_solve_qp(self):
         N = self.N
@@ -117,17 +142,12 @@ class GASCF(lib.StreamObject):
             U = self._get_U(I)
             D = D_bare @ (scipy.linalg.sqrtm(np.linalg.inv(Delta_T @ (np.eye(M) - Delta_T))))
 
-            # construct annahilation operators
-            C = np.zeros((M, 2**M, 2**M))
-            for i in range(M):
-                for state in range(2**M):
-                    if (state & (1 << i)):
-                        C[i, state ^ (1 << i), state] = (-1)**(bin(state >> (i+1)).count('1'))
+            C = self._get_annahilation_operators()
             
             # construct embedding Hamiltonian
             Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))
             Hloc += sum(U[a, b, c, d] * C[a].T @ C[b].T @ C[c] @ C[d] for a in range(M) for b in range(M) for c in range(M) for d in range(M))
-            HL = sum(D[a, b] * np.kron(C[a], np.eye(2**M)) @ np.kron(np.eye(2**M), C[b]) for a in range(M) for b in range(M))
+            HL = sum(D[a, b] * np.kron(C[a].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[b]) for a in range(M) for b in range(M))
             Hemb = np.kron(Hloc, np.eye(2**M)) + HL + HL.conj().T
 
             # get ground state
@@ -135,10 +155,17 @@ class GASCF(lib.StreamObject):
             self.phi[I] = phiC[:,0]
 
     def kernel(self):
-        # set mo_energy, mo_coeff, C, by solving preliminary Hqp
-        self._update_solve_qp()
-        # set phi by solving Hemb
-        self._update_solve_eb()
+        for i in range(100):
+            # set mo_energy, mo_coeff, C, by solving  Hqp
+            self._update_solve_qp()
+            # set phi by solving Hemb
+            self._update_solve_eb()
+
+            self._update_renormalizations()
+            print(f"Iteration {i}")
+            for I in range(self.N):
+                print(f"self.R[{I}] = {self.R[I]}")
+            
         st()
 
         self._post_kernel()
