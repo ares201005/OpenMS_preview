@@ -1,5 +1,6 @@
 import numpy as np
-from pyscf import lib, gto
+import scipy.linalg
+from pyscf import lib
 
 from pdb import set_trace as st
 
@@ -9,7 +10,7 @@ from pdb import set_trace as st
 class GASCF(lib.StreamObject):
     def __init__(self, h1e, eri, N, Ne):
         # sanity check inputs
-        if (Ne > N):
+        if (Ne > h1e.shape[0]):
             raise ValueError
         self.N = N
         self.Ne = Ne
@@ -56,8 +57,8 @@ class GASCF(lib.StreamObject):
 
         # initialize renormalizations and Lagrange multipliers
         # how to get initial guess?
-        self.R = np.ones((N, M, M))
-        self.D = np.ones((N, M, M))
+        self.R = np.broadcast_to(np.eye(M), (N, M, M)).copy()
+        self.D = np.zeros((N, M, M))
         self.Lc = np.zeros((N, M, M))
         self.L = np.zeros((M, M))
 
@@ -70,10 +71,6 @@ class GASCF(lib.StreamObject):
 
         # self.C is the correlation matrix
         self.C = np.zeros((N, N, M, M))
-
-        # set mo_energy, mo_coeff, rho, by solving preliminary Hqp
-        self._update_solve_qp()
-        st()
 
     def _get_ht(self, I):
         return self.h[I]
@@ -95,7 +92,7 @@ class GASCF(lib.StreamObject):
                 teff_IJ = self.R[I].T @ self._get_tt(I, J) @ self.R[J].conj()
                 for a in range(M):
                     for b in range(M):
-                        teff[I*M + a, I*M + b] = teff_IJ[a, b]
+                        teff[I*M + a, J*M + b] = teff_IJ[a, b]
         Hqp = teff
 
         # diagonalize Hqp and calculate correlation matrix
@@ -105,13 +102,45 @@ class GASCF(lib.StreamObject):
         for I in range(N):
             for J in range(N):
                 self.C[I, J] = C[slice(I*M, (I+1)*M), slice(J*M, (J+1)*M)]
-
+        
 
     def _update_solve_eb(self):
-        pass
+        N = self.N
+        M = self.M
+        for I in range(N):
+            # calculate Lagrange multipliers
+            D_bare = sum((self._get_tt(I, J) @ self.R[J].conj() @ self.C[I, J].T) for J in range(N))
+
+            # get coefficients for embedding Hamiltonian
+            Delta_T = self.C[I, I].T
+            h = self._get_ht(I)
+            U = self._get_U(I)
+            D = D_bare @ (scipy.linalg.sqrtm(np.linalg.inv(Delta_T @ (np.eye(M) - Delta_T))))
+
+            # construct annahilation operators
+            C = np.zeros((M, 2**M, 2**M))
+            for i in range(M):
+                for state in range(2**M):
+                    if (state & (1 << i)):
+                        C[i, state ^ (1 << i), state] = (-1)**(bin(state >> (i+1)).count('1'))
+            
+            # construct embedding Hamiltonian
+            Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))
+            Hloc += sum(U[a, b, c, d] * C[a].T @ C[b].T @ C[c] @ C[d] for a in range(M) for b in range(M) for c in range(M) for d in range(M))
+            HL = sum(D[a, b] * np.kron(C[a], np.eye(2**M)) @ np.kron(np.eye(2**M), C[b]) for a in range(M) for b in range(M))
+            Hemb = np.kron(Hloc, np.eye(2**M)) + HL + HL.conj().T
+
+            # get ground state
+            E, phiC = np.linalg.eigh(Hemb)
+            self.phi[I] = phiC[:,0]
 
     def kernel(self):
-        pass
+        # set mo_energy, mo_coeff, C, by solving preliminary Hqp
+        self._update_solve_qp()
+        # set phi by solving Hemb
+        self._update_solve_eb()
+        st()
+
         self._post_kernel()
 
     def _post_kernel(self):
@@ -127,14 +156,16 @@ def get_ga_model(N=12, filling=0.5, U=2.0, t=-1.0, PBC=True):
     for I in range(N-1):
         for a in range(2):
             h1e[I*2 + a, (I+1)*2 + a] = t
+            h1e[(I+1)*2 + a, I*2 + a] = t
     if PBC:
         for a in range(2):
             h1e[(N-1)*2 + a, a] = t
+            h1e[a, (N-1)*2 + a] = t
 
     # 2-electron interactions
     eri = np.zeros((dim, dim, dim, dim))
     for I in range(N):
-        eri[I*2, I*2, I*2+1, I*2+1] = U
+        eri[I*2, I*2+1, I*2, I*2+1] = -U
 
     return GASCF(h1e, eri, N, Ne)
 

@@ -107,7 +107,6 @@ Program references
 ------------------
 """
 
-from pdb import set_trace as st
 import sys
 import tempfile
 import scipy
@@ -122,6 +121,8 @@ from pyscf.scf import chkfile
 from pyscf.lib import logger
 from pyscf import lib
 from pyscf import __config__
+
+from pdb import set_trace as st
 
 
 WITH_META_LOWDIN = getattr(__config__, "scf_analyze_with_meta_lowdin", True)
@@ -175,6 +176,125 @@ def get_occ(mf, mo_energy=None, mo_coeff=None):
         logger.debug(mf, '  mo_energy =\n%s', mo_energy)
         numpy.set_printoptions(threshold=1000)
     return mo_occ
+
+
+
+def kernel(
+    ga,
+    conv_tol=1e-10,
+    conv_tol_grad=None,
+    dump_chk=True,
+    dm0=None,
+    callback=None,
+    conv_check=True,
+    **kwargs,
+):
+    r"""kernel: the GA-SCF driver.
+
+    Parameters
+    ----------
+    ga : an instance of SCF class. ga object holds all parameters to control GA-SCF.
+         One can modify its member functions to change the behavior of GA-SCF.
+         The member functions which are called in kernel are
+
+    conv_tol (float, optional): Convergence tolerance. Defaults to 1e-10.
+    conv_tol_grad (float, optional): Convergence tolerance for gradients. Defaults to None.
+    dm0 (numpy.ndarray, optional): Initial guess density matrix. Defaults to None.
+
+    kwargs: (TODO)
+
+    Returns: (TODO)
+
+    """
+
+    logger.info(ga, f"\n{'*' * 70}\n {' ' * 20}Gutzwiller calculation \n{'*' * 70}")
+
+    if "init_dm" in kwargs:
+        raise RuntimeError(
+            '''You see this error message because of the API updates in pyscf v0.11.''' +
+            '''Keyword argument "init_dm" is replaced by "dm0"'''
+        )
+    cput0 = (logger.process_clock(), logger.perf_counter())
+    if conv_tol_grad is None:
+        conv_tol_grad = numpy.sqrt(conv_tol)
+        logger.info(ga, "Set gradient conv threshold to %g", conv_tol_grad)
+
+    mol = ga.mol
+    s1e = ga.get_ovlp(mol)
+
+    # initialize r and lambda
+    R = kwargs.get("R", None)
+    lamda = kwargs.get("lamda", None)
+    ga.init_gwf_r_lambda(R, lamda)
+
+    # initial fock matrix
+    init_fock = ga.update_qp_ham()
+    print('initial fock matrix is', init_fock)
+    st()
+
+    # initialize dm0
+    if dm0 is None:
+        #dm = ga.get_init_guess(mol, ga.init_guess, s1e=s1e, **kwargs)
+        mo_energy, mo_coeff = eig(init_fock, s1e)
+        mo_occ = ga.get_occ(mo_energy, mo_coeff)
+        dm = ga.make_rdm1(mo_coeff, mo_occ)
+    else:
+        dm = dm0
+
+    print("\n dm is \n", numpy.trace(dm))
+
+    # initialize variational parameters
+    ga.init_var_params(dm)
+
+    print(" ga variaitonal params are \n", ga.f)
+
+    # TODO: use DIIS or Newton solver for the SCF.
+
+    # scf params
+    scf_conv = False
+    e_tot = 0.0
+    ga.cycles = 0
+    fold = ga.f
+    for cycle in range(ga.max_cycle):
+        # update embedding Hamiltonian and xx
+        dm_last = dm
+        last_e = e_tot
+
+        ga.update_renormalizations(dm)
+
+        # get fock matrix (qp) matrix
+        fock = ga.update_qp_ham()
+
+        # Diagonalize Fock matrix and update density matrix
+        mo_energy, mo_coeff = eig(fock, s1e)
+        mo_occ = ga.get_occ(mo_energy, mo_coeff)
+        dm = ga.make_rdm1(mo_coeff, mo_occ)
+
+        # update deltas
+        ga.get_deltas(dm)
+
+        # update var_params (f, or phi) and lambda
+        ga.update_var_params(dm)
+        err = ga.update_lambda(dm)
+        delta_f = fold - ga.f
+
+        norm_ddm = numpy.linalg.norm(dm-dm_last)
+        gnorm = numpy.linalg.norm(delta_f)
+
+        if gnorm < conv_tol or err < conv_tol_grad:
+            scf_conv = True
+
+        logger.info(ga, '\ncycle= %d E= %.15g  delta_E= %4.3g  |g|= %4.3g  |g_var|= %4.3g  |ddm|= %4.3g',
+                    cycle+1, e_tot, e_tot-last_e, err, gnorm, norm_ddm)
+        # logger.debug(ga, "cycle= %d times: h1e_do = %.6g eta_grad = %.6g hcore = %.6g veff = %.6g  fock = %.6g scf = %.6g",
+        fold = ga.f
+
+    ga.cycles = cycle + 1
+
+    logger.timer(ga, "scf_cycle", *cput0)
+    # A post-processing hook before return
+    ga.post_kernel(locals())
+    return scf_conv, e_tot #, mo_energy, mo_coeff, mo_occ
 
 
 def gwf_rl_step():
@@ -240,122 +360,6 @@ def gwf_fvec():
     """
 
     pass
-
-def kernel(
-    ga,
-    conv_tol=1e-10,
-    conv_tol_grad=None,
-    dump_chk=True,
-    dm0=None,
-    callback=None,
-    conv_check=True,
-    **kwargs,
-):
-    r"""kernel: the GA-SCF driver.
-
-    Parameters
-    ----------
-    ga : an instance of SCF class. ga object holds all parameters to control GA-SCF.
-        One can modify its member functions to change the behavior of GA-SCF.
-        The member functions which are called in kernel are
-
-    conv_tol (float, optional): Convergence tolerance. Defaults to 1e-10.
-    conv_tol_grad (float, optional): Convergence tolerance for gradients. Defaults to None.
-    dm0 (numpy.ndarray, optional): Initial guess density matrix. Defaults to None.
-
-    kwargs: (TODO)
-
-    Returns: (TODO)
-
-    """
-
-    logger.info(ga, f"\n{'*' * 70}\n {' ' * 20}Gutzwiller calculation \n{'*' * 70}")
-
-    if "init_dm" in kwargs:
-        raise RuntimeError(
-            '''You see this error message because of the API updates in pyscf v0.11.''' +
-            '''Keyword argument "init_dm" is replaced by "dm0"'''
-        )
-    cput0 = (logger.process_clock(), logger.perf_counter())
-    if conv_tol_grad is None:
-        conv_tol_grad = numpy.sqrt(conv_tol)
-        logger.info(ga, "Set gradient conv threshold to %g", conv_tol_grad)
-
-    mol = ga.mol
-    s1e = ga.get_ovlp(mol)
-
-    # initialize r and lambda
-    R = kwargs.get("R", None)
-    lamda = kwargs.get("lamda", None)
-    ga.init_gwf_r_lambda(R, lamda)
-
-    # initial fock matrix
-    init_fock = ga.update_qp_ham()
-    print('initial fock matrix is', init_fock)
-
-    # initialize dm0
-    if dm0 is None:
-        #dm = ga.get_init_guess(mol, ga.init_guess, s1e=s1e, **kwargs)
-        mo_energy, mo_coeff = eig(init_fock, s1e)
-        mo_occ = ga.get_occ(mo_energy, mo_coeff)
-        dm = ga.make_rdm1(mo_coeff, mo_occ)
-    else:
-        dm = dm0
-
-    print("\n dm is \n", numpy.trace(dm))
-
-    # initialize variational parameters
-    ga.init_var_params(dm)
-
-    print(" ga variaitonal params are \n", ga.f)
-
-    # TODO: use DIIS or Newton solver for the SCF.
-
-    # scf params
-    scf_conv = False
-    e_tot = 0.0
-    ga.cycles = 0
-    fold = ga.f
-    for cycle in range(ga.max_cycle):
-        # update embedding Hamiltonian and xx
-        dm_last = dm
-        last_e = e_tot
-
-        ga.update_renormalizations(dm)
-
-        # get fock matrix (qp) matrix
-        fock = ga.update_qp_ham()
-
-        # Diagonalize Fock matrix and update density matrix
-        mo_energy, mo_coeff = eig(fock, s1e)
-        mo_occ = ga.get_occ(mo_energy, mo_coeff)
-        dm = ga.make_rdm1(mo_coeff, mo_occ)
-
-        # update deltas
-        ga.get_deltas(dm)
-
-        # update var_params (f, or phi) and lambda
-        ga.update_var_params(dm)
-        err = ga.update_lambda(dm)
-        delta_f = fold - ga.f
-
-        norm_ddm = numpy.linalg.norm(dm-dm_last)
-        gnorm = numpy.linalg.norm(delta_f)
-
-        if gnorm < conv_tol or err < conv_tol_grad:
-            scf_conv = True
-
-        logger.info(ga, '\ncycle= %d E= %.15g  delta_E= %4.3g  |g|= %4.3g  |g_var|= %4.3g  |ddm|= %4.3g',
-                    cycle+1, e_tot, e_tot-last_e, err, gnorm, norm_ddm)
-        # logger.debug(ga, "cycle= %d times: h1e_do = %.6g eta_grad = %.6g hcore = %.6g veff = %.6g  fock = %.6g scf = %.6g",
-        fold = ga.f
-
-    ga.cycles = cycle + 1
-
-    logger.timer(ga, "scf_cycle", *cput0)
-    # A post-processing hook before return
-    ga.post_kernel(locals())
-    return scf_conv, e_tot #, mo_energy, mo_coeff, mo_occ
 
 
 class GASCF(lib.StreamObject): # (hf.RHF):
@@ -430,8 +434,7 @@ class GASCF(lib.StreamObject): # (hf.RHF):
 
 
         logger.debug(self, f"GWF initialization")
-        # self.Mpp[0, 1] = self.Mpp[1, 0] = self.Mpp[1, 2] = self.Mpp[2, 1] = numpy.sqrt(2.0)
-        self.Mpp[1, 0] = self.Mpp[2, 1] = 1
+        self.Mpp[0, 1] = self.Mpp[1, 0] = self.Mpp[1, 2] = self.Mpp[2, 1] = numpy.sqrt(2.0)
         self.Npp[1, 1] = 0.5
         self.Npp[2, 2] = 1.0
         self.Upp[2, 2] = 1.0
@@ -492,19 +495,6 @@ class GASCF(lib.StreamObject): # (hf.RHF):
         """
         if mol is None: mol = self.mol
         return hf.get_hcore(mol)
-    
-    def dressed_hopping(self):
-        renormalized_hopping = numpy.zeros((self.nao, self.nao))
-        h1e = self.get_bare_hcore()
-        for I in range(self.nao):
-            for J in range(self.nao):
-                if (I != J):
-                    renormalized_hopping[I, J] = h1e[I, J]
-
-        # increment due to electron-boson interaction
-        # code here
-
-        return renormalized_hopping
 
     def update_renormalizations(self, dm):
         r"""
@@ -536,8 +526,8 @@ class GASCF(lib.StreamObject): # (hf.RHF):
 
         tmp = self.f[2].conj() * self.f[1] + self.f[1].conj() * self.f[0]
         self.R = tmp / numpy.sqrt(abs(n0 * (1.0 - n0)) + EPS)
-        # self.R[self.R> 1.0] = 1.0 # prevent the R larger than 1.0
-        logger.debug(self, f"test: new renormalization factors are {self.R}")
+        self.R[self.R> 1.0] = 1.0 # prevent the R larger than 1.0
+        logger.debug(self, f"test: new renormalizaiton factors are {self.R}")
 
 
     def get_deltas(self, dm):
@@ -652,19 +642,13 @@ class GASCF(lib.StreamObject): # (hf.RHF):
 
         if R is None: R = self.R
         if lamda is None: lamda = self.lamda
+        st()
 
-        # populate Lagrange multiplier
         ham = numpy.zeros((self.nao, self.nao))
         numpy.fill_diagonal(ham, lamda)
 
-        # add hopping term
-        tt = self.dressed_hopping()
-        renormalized_hopping = numpy.zeros((self.nao, self.nao))
-        for I in range(self.nao):
-            for J in range(self.nao):
-                renormalized_hopping[I, J] = tt[I, J] * R[I] * R[J].conj()
-        ham += renormalized_hopping
-
+        h1e = self.get_bare_hcore()
+        ham += numpy.outer(R, R) * h1e
         return ham
 
 
@@ -680,7 +664,7 @@ class GASCF(lib.StreamObject): # (hf.RHF):
         pass
 
     def Jacobian(self):
-        r"""return Jacobian
+        r"""return Jacobina
 
         J = d
         """
@@ -708,6 +692,7 @@ class GASCF(lib.StreamObject): # (hf.RHF):
         return self.e_tot
 
     kernel = lib.alias(scf, alias_name='kernel')
+
     def _finalize(self):
         '''Hook for dumping results and clearing up the object.'''
         if self.converged:
@@ -879,3 +864,46 @@ if __name__ == "__main__":
     gamf.verbose = 5
     gamf.max_cycle = 1000
     gamf.kernel()
+
+    """
+    atom = f"C   0.00000000   0.00000000  0.0;\
+             O   0.00000000   1.23456800  0.0;\
+             H   0.97075033  -0.54577032  0.0;\
+             C  -1.21509881  -0.80991169  0.0;\
+             H  -1.15288176  -1.89931439  0.0;\
+             C  -2.43440063  -0.19144555  0.0;\
+             H  -3.37262777  -0.75937214  0.0;\
+             O  -2.62194056   1.12501165  0.0;\
+             H  -1.71446384   1.51627790  0.0"
+
+    mol = gto.M(
+        atom = atom,
+        basis="sto3g",
+        #basis="cc-pvdz",
+        unit="Angstrom",
+        symmetry=True,
+        verbose=3,
+    )
+    print("mol coordinates=\n", mol.atom_coords())
+
+    hf = scf.HF(mol)
+    hf.max_cycle = 200
+    hf.conv_tol = 1.0e-8
+    hf.diis_space = 10
+    hf.polariton = True
+
+    mf = hf.run(verbose=4)
+    #print("nuclear energy=     ", mf.energy_nuc())
+    #dm = mf.make_rdm1()
+
+    print("\n=========== GA-HF calculation  ======================\n")
+    from openms.gwf import gahf
+
+    mol.verbose = 5
+    gamf = gahf.GASCF(mol)
+    gamf.max_cycle = 500
+    gamf.kernel()
+
+    print("\nHF energy is=  ", mf.e_tot)
+    print("\nGASCF energy is=", gamf.e_tot)
+    """
