@@ -12,9 +12,9 @@ class GASCF(lib.StreamObject):
         # sanity check inputs
         if (Ne > h1e.shape[0]):
             raise ValueError
-        self.N = N
-        self.Ne = Ne
-        self.cutoff = embedding_cutoff
+        self._N = N
+        self._Ne = Ne
+        self._cutoff = embedding_cutoff
 
         h1e_shape = h1e.shape
         if (len(h1e_shape) != 2):
@@ -33,7 +33,7 @@ class GASCF(lib.StreamObject):
         
         # extract 1-electron coefficients
         M = int(h1e_shape[0] / N)
-        self.M = M
+        self._M = M
         h = np.zeros((N, M, M))
         h_int = np.zeros((N*M, N*M))
         for I in range(N):
@@ -59,7 +59,6 @@ class GASCF(lib.StreamObject):
         # initialize renormalizations and Lagrange multipliers
         # how to get initial guess?
         self.R = np.broadcast_to(np.eye(M), (N, M, M)).copy()
-        self.L = np.zeros((M, M))
 
         # everything is done in terms of
         # \ket{\Psi_0^e} given by self.mo_occ[I]
@@ -76,8 +75,8 @@ class GASCF(lib.StreamObject):
         for I in range(N):
             self.phi[I] = phi
 
-        # self.C is the correlation matrix
-        self.C = np.zeros((N, N, M, M))
+        # self._C is the correlation matrix
+        self._C = np.zeros((N, N, M, M))
 
     def _get_ht(self, I):
         return self.h[I]
@@ -97,11 +96,11 @@ class GASCF(lib.StreamObject):
         return C
     
     def _update_renormalizations(self):
-        for I in range(self.N):
+        for I in range(self._N):
             # get local state and correlation
-            M = self.M
+            M = self._M
             C = self._get_annahilation_operators(M)
-            Delta = self.C[I, I]
+            Delta = self._C[I, I]
             mat = scipy.linalg.sqrtm(np.linalg.inv(Delta @ (np.eye(M) - Delta)))
             phi = self.phi[I]
 
@@ -114,8 +113,8 @@ class GASCF(lib.StreamObject):
             
     
     def _update_solve_qp(self):
-        N = self.N
-        M = self.M
+        N = self._N
+        M = self._M
 
         # construct qp Hamiltonian as an N*M x N*M matrix
         teff = np.zeros((N*M, N*M))
@@ -131,14 +130,14 @@ class GASCF(lib.StreamObject):
 
         # diagonalize Hqp and calculate correlation matrix
         self.mo_energy, self.mo_coeff = np.linalg.eigh(Hqp)
-        occ = [(i < self.Ne) for i in range(N*M)]
+        occ = [(i < self._Ne) for i in range(N*M)]
         C = self.mo_coeff[:, occ].conj() @ self.mo_coeff[:, occ].T
         for I in range(N):
             for J in range(N):
-                self.C[I, J] = C[slice(I*M, (I+1)*M), slice(J*M, (J+1)*M)]
+                self._C[I, J] = C[slice(I*M, (I+1)*M), slice(J*M, (J+1)*M)]
         
-    def _get_phi_matrix(self, phi):
-        M = self.M
+    def get_phi_matrix(self, phi):
+        M = self._M
         matrix = np.zeros((2**M, 2**M))
         for Gamma in range(2**M):
             for n in range(2**M):
@@ -146,16 +145,16 @@ class GASCF(lib.StreamObject):
         return matrix
     
     def _update_solve_eb(self):
-        N = self.N
+        N = self._N
         for I in range(N):
-            M = self.M
+            M = self._M
             phi = self.phi[I]
 
             # calculate Lagrange multipliers
-            D_bare = sum((self._get_tt(I, J) @ self.R[J].conj() @ self.C[I, J].T) for J in range(N))
+            D_bare = sum((self._get_tt(I, J) @ self.R[J].conj() @ self._C[I, J].T) for J in range(N))
 
             # get coefficients for embedding Hamiltonian
-            Delta_T = self.C[I, I].T
+            Delta_T = self._C[I, I].T
             h = self._get_ht(I)
             U = self._get_U(I)
             D = D_bare @ (scipy.linalg.sqrtm(np.linalg.inv(Delta_T @ (np.eye(M) - Delta_T))))
@@ -185,7 +184,7 @@ class GASCF(lib.StreamObject):
             # construct and solve embedding Hamiltonian
             Hemb = np.kron(Hloc, np.eye(2**M)) + (HM + HM.conj().T) + (HL + HL.conj().T)
             E, eigvec = np.linalg.eigh(Hemb)
-            phiC = np.where(np.abs(eigvec) < self.cutoff, 0, eigvec)
+            phiC = np.where(np.abs(eigvec) < self._cutoff, 0, eigvec)
 
             # TODO check that groundstate is nondegenerate
             if (E[0] == E[1]):
@@ -195,12 +194,14 @@ class GASCF(lib.StreamObject):
 
     def kernel(self):
         for i in range(100):
+            prev_coeff = self.mo_coeff
             # set mo_energy, mo_coeff, C, by solving  Hqp
             self._update_solve_qp()
             # set phi by solving Hemb
             self._update_solve_eb()
 
             self._update_renormalizations()
+
             print(f"Iteration {i}")   
             
         st()
