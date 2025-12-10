@@ -8,12 +8,13 @@ from pdb import set_trace as st
 # The ordering of matrix indices is given by (0,1), ... , (0, M), (1,0), ..., (1,M), ..., (N,M)
 
 class GASCF(lib.StreamObject):
-    def __init__(self, h1e, eri, N, Ne):
+    def __init__(self, h1e, eri, N, Ne, embedding_cutoff=1e-14):
         # sanity check inputs
         if (Ne > h1e.shape[0]):
             raise ValueError
         self.N = N
         self.Ne = Ne
+        self.cutoff = embedding_cutoff
 
         h1e_shape = h1e.shape
         if (len(h1e_shape) != 2):
@@ -58,7 +59,6 @@ class GASCF(lib.StreamObject):
         # initialize renormalizations and Lagrange multipliers
         # how to get initial guess?
         self.R = np.broadcast_to(np.eye(M), (N, M, M)).copy()
-        self.Lc = np.zeros((N, M, M))
         self.L = np.zeros((M, M))
 
         # everything is done in terms of
@@ -66,7 +66,15 @@ class GASCF(lib.StreamObject):
         # $\ket{\Psi_I}$ given by self.phi[I]
         self.mo_energy = np.zeros((N*M))
         self.mo_coeff = np.zeros((N*M, N*M))
-        self.phi = np.ones((N, 4**M))
+
+        # initialize all phi to uniformly id on each block (unentangled)
+        phi = np.zeros(4**M)
+        for Gamma in range(2**M):
+            phi[Gamma*(2**M) + Gamma] = 1
+
+        self.phi = np.zeros((N, 4**M))
+        for I in range(N):
+            self.phi[I] = phi
 
         # self.C is the correlation matrix
         self.C = np.zeros((N, N, M, M))
@@ -80,8 +88,7 @@ class GASCF(lib.StreamObject):
     def _get_tt(self, I, J):
         return self.t[I, J]
 
-    def _get_annahilation_operators(self):
-        M = self.M
+    def _get_annahilation_operators(self, M):
         C = np.zeros((M, 2**M, 2**M))
         for i in range(M):
             for state in range(2**M):
@@ -90,10 +97,10 @@ class GASCF(lib.StreamObject):
         return C
     
     def _update_renormalizations(self):
-        C = self._get_annahilation_operators()
         for I in range(self.N):
             # get local state and correlation
             M = self.M
+            C = self._get_annahilation_operators(M)
             Delta = self.C[I, I]
             mat = scipy.linalg.sqrtm(np.linalg.inv(Delta @ (np.eye(M) - Delta)))
             phi = self.phi[I]
@@ -102,8 +109,8 @@ class GASCF(lib.StreamObject):
             opmat = np.zeros((M, M))
             for alpha in range(M):
                 for b in range(M):
-                    opmat[alpha, b] = phi.conj().T @ (np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[b])) @ phi
-            self.R[I] = np.clip(opmat @ mat, None, 1.0) # prevent the R larger than 1.0
+                    opmat[alpha, b] = phi.conj().T @ (np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[b].T)) @ phi
+            self.R[I] = opmat @ mat
             
     
     def _update_solve_qp(self):
@@ -120,6 +127,8 @@ class GASCF(lib.StreamObject):
                         teff[I*M + a, J*M + b] = teff_IJ[a, b]
         Hqp = teff
 
+        # missing logic for lambda
+
         # diagonalize Hqp and calculate correlation matrix
         self.mo_energy, self.mo_coeff = np.linalg.eigh(Hqp)
         occ = [(i < self.Ne) for i in range(N*M)]
@@ -128,11 +137,20 @@ class GASCF(lib.StreamObject):
             for J in range(N):
                 self.C[I, J] = C[slice(I*M, (I+1)*M), slice(J*M, (J+1)*M)]
         
-
+    def _get_phi_matrix(self, phi):
+        M = self.M
+        matrix = np.zeros((2**M, 2**M))
+        for Gamma in range(2**M):
+            for n in range(2**M):
+                matrix[Gamma, n] = phi[Gamma*(2**M) + n]
+        return matrix
+    
     def _update_solve_eb(self):
         N = self.N
-        M = self.M
         for I in range(N):
+            M = self.M
+            phi = self.phi[I]
+
             # calculate Lagrange multipliers
             D_bare = sum((self._get_tt(I, J) @ self.R[J].conj() @ self.C[I, J].T) for J in range(N))
 
@@ -142,16 +160,37 @@ class GASCF(lib.StreamObject):
             U = self._get_U(I)
             D = D_bare @ (scipy.linalg.sqrtm(np.linalg.inv(Delta_T @ (np.eye(M) - Delta_T))))
 
-            C = self._get_annahilation_operators()
+            C = self._get_annahilation_operators(M)
             
-            # construct embedding Hamiltonian
+            # construct local Hamiltonian
             Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))
             Hloc += sum(U[a, b, c, d] * C[a].T @ C[b].T @ C[c] @ C[d] for a in range(M) for b in range(M) for c in range(M) for d in range(M))
-            HL = sum(D[a, b] * np.kron(C[a].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[b]) for a in range(M) for b in range(M))
-            Hemb = np.kron(Hloc, np.eye(2**M)) + HL + HL.conj().T
+            
+            # construct lambda part of the Hamiltonian
+            HL = np.zeros((2**M, 2**M))
+            for a in range(M):
+                for b in range(M):
+                    X = np.zeros((M, M))
+                    X[a, b] = 1
+                    H = (X @ (np.eye(M) - Delta_T.T)) - (Delta_T.T @ X)
+                    B = Delta_T.T @ (np.eye(M) - Delta_T.T)
+                    Y = scipy.linalg.solve_lyapunov(scipy.linalg.sqrtm(B), -H)
+                    LC = sum(D[alpha, c] * (phi.T.conj() @ np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[d].T) @ phi) * Y[d, c] for alpha in range(M) for c in range(M) for d in range(M))
+                    HL += LC * C[b].T @ C[a]
+            HL = np.kron(np.eye(2**M), HL)
+            
+            # construct Lagrange multiplier part of the Hamiltonian
+            HM = sum(D[a, b] * np.kron(C[a].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[b].T) for a in range(M) for b in range(M)) 
+            
+            # construct and solve embedding Hamiltonian
+            Hemb = np.kron(Hloc, np.eye(2**M)) + (HM + HM.conj().T) + (HL + HL.conj().T)
+            E, eigvec = np.linalg.eigh(Hemb)
+            phiC = np.where(np.abs(eigvec) < self.cutoff, 0, eigvec)
 
-            # get ground state
-            E, phiC = np.linalg.eigh(Hemb)
+            # TODO check that groundstate is nondegenerate
+            if (E[0] == E[1]):
+                # groundstate is degenerate
+                st()
             self.phi[I] = phiC[:,0]
 
     def kernel(self):
@@ -162,9 +201,7 @@ class GASCF(lib.StreamObject):
             self._update_solve_eb()
 
             self._update_renormalizations()
-            print(f"Iteration {i}")
-            for I in range(self.N):
-                print(f"self.R[{I}] = {self.R[I]}")
+            print(f"Iteration {i}")   
             
         st()
 
