@@ -101,7 +101,7 @@ class GASCF(lib.StreamObject):
             M = self._M
             C = self._get_annahilation_operators(M)
             Delta = self._C[I, I]
-            mat = scipy.linalg.sqrtm(np.linalg.inv(Delta @ (np.eye(M) - Delta)))
+            B = scipy.linalg.sqrtm(np.linalg.inv(Delta @ (np.eye(M) - Delta)))
             phi = self.phi[I]
 
             # compute R
@@ -109,7 +109,7 @@ class GASCF(lib.StreamObject):
             for alpha in range(M):
                 for b in range(M):
                     opmat[alpha, b] = phi.conj().T @ (np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[b].T)) @ phi
-            self.R[I] = opmat @ mat
+            self.R[I] = opmat @ B
             
     
     def _update_solve_qp(self):
@@ -148,16 +148,16 @@ class GASCF(lib.StreamObject):
         N = self._N
         for I in range(N):
             M = self._M
-            phi = self.phi[I]
-
-            # calculate Lagrange multipliers
-            D_bare = sum((self._get_tt(I, J) @ self.R[J].conj() @ self._C[I, J].T) for J in range(N))
 
             # get coefficients for embedding Hamiltonian
-            Delta_T = self._C[I, I].T
             h = self._get_ht(I)
             U = self._get_U(I)
-            D = D_bare @ (scipy.linalg.sqrtm(np.linalg.inv(Delta_T @ (np.eye(M) - Delta_T))))
+            Delta = self._C[I, I]
+            A = scipy.linalg.sqrtm(Delta @ (np.eye(M) - Delta))
+            B = np.linalg.inv(A)
+
+            # calculate Lagrange multipliers
+            D = sum((self._get_tt(I, J) @ self.R[J].conj() @ self._C[I, J].T @ B.T) for J in range(N))
 
             C = self._get_annahilation_operators(M)
             
@@ -169,12 +169,11 @@ class GASCF(lib.StreamObject):
             HL = np.zeros((2**M, 2**M))
             for a in range(M):
                 for b in range(M):
-                    X = np.zeros((M, M))
-                    X[a, b] = 1
-                    H = (X @ (np.eye(M) - Delta_T.T)) - (Delta_T.T @ X)
-                    B = Delta_T.T @ (np.eye(M) - Delta_T.T)
-                    Y = scipy.linalg.solve_lyapunov(scipy.linalg.sqrtm(B), -H)
-                    LC = sum(D[alpha, c] * (phi.T.conj() @ np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[d].T) @ phi) * Y[d, c] for alpha in range(M) for c in range(M) for d in range(M))
+                    E = np.zeros((M, M))
+                    E[a, b] = 1
+                    H = (E @ (np.eye(M) - Delta)) - (Delta @ E)
+                    Z = scipy.linalg.solve_continuous_lyapunov(A, H)
+                    LC = -np.trace(D.T @ self.R[I] @ Z)
                     HL += LC * C[b].T @ C[a]
             HL = np.kron(np.eye(2**M), HL)
             
