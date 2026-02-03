@@ -6,4 +6,8 @@ Estimators
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: openms.qmc.gf_boson
+   :members:
+   :undoc-members:
+   :show-inheritance:
 

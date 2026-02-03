@@ -114,6 +114,9 @@ class BaseWalkers(object):
         self.log_detR = backend.zeros(self.nwalkers, dtype=backend.complex128)
         self.log_shift = backend.zeros(self.nwalkers)
         self.log_detR_shift = backend.zeros(self.nwalkers)
+        #
+        self.boson_ovlp = backend.ones(self.nwalkers, dtype=backend.complex128)
+        self.boson_log_weight = backend.zeros(self.nwalkers, dtype=backend.complex128)
 
         self.eloc = backend.zeros(self.nwalkers)
         self.ehybrid = backend.zeros(self.nwalkers)  # or None?

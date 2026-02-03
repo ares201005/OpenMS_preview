@@ -683,6 +683,7 @@ class TrialWFBase(object):
         self._numdets_props = kwargs.get("numdets_props", 1)
         self._numdets_chunks = kwargs.get("numdets_chunks", 1)
         self.OAO = kwargs.get("OAO", True)
+        self.cas_idx = kwargs.get("CAS", None)  # set cas indices
         self.half_rotated = False
 
         self.boson_psi = None

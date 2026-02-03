@@ -249,8 +249,6 @@ class QMCbase(object):
         if mpi_comm is None:
             from openms.__mpi__ import MPI, CommType, MPIWrapper
             self._mpi = MPIWrapper()
-        if "pra2024" not in runtime_refs:
-            runtime_refs.append("pra2024")
 
         # io params
         self.stdout = sys.stdout
@@ -435,7 +433,7 @@ class QMCbase(object):
             if self.mf is None:
                 self.mf = self.trial.mf
             logger.debug(self, f"Debug: self.mf = {self.mf}")
-            logger.debug(self, f"Debug: trail.mf = {self.trial.mf}")
+            logger.debug(self, f"Debug: trial.mf = {self.trial.mf}")
         else:
             logger.info(self, "Trial WF is set from the input")
 
@@ -735,8 +733,13 @@ class QMCbase(object):
         if self.walkers.boson_phiw is not None:
             ortho_walkers = backend.zeros_like(self.walkers.boson_phiw)
             norms = backend.einsum('ij,ij->i', self.walkers.boson_phiw, self.walkers.boson_phiw.conj())
-            norms = backend.sqrt(norms)
-            self.walkers.boson_phiw = backend.abs(self.walkers.boson_phiw / norms[:, None])
+            norms = backend.maximum(backend.sqrt(norms), 1.e-12)
+            self.walkers.boson_phiw = self.walkers.boson_phiw / norms[:, None]
+            self.walkers.boson_log_weight += backend.log(norms)
+            self.walkers.boson_ovlp = self.walkers.boson_phiw @ self.trial.boson_psi.conj()
+            self.walkers.boson_ovlp /= norms
+            self.walkers.ovlp *= self.walkers.boson_ovlp
+
             # for iw in range(self.walkers.boson_phiw.shape[0]):
             #    ortho_walkers[iw] = backend.linalg.qr(self.walkers.boson_phiw[iw])[0]
             # self.walkers.boson_phiw = ortho_walkers

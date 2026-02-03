@@ -181,7 +181,6 @@ def stochastic_thc(L, n_stoch, method="rademacher", seed=None, n_svd_keep=0):
         xi = (xi - 0.5) * 2 / numpy.sqrt(n_stoch)  # Shift to zero-mean
 
     elif method == "hybrid":
-        # TBA
         raise NotImplementedError(f"{method} not implemented yet")
 
     elif method == "svd":
@@ -297,15 +296,7 @@ def bilinear_decomposition(Afac, Bfac, chol_eb, decouple_scheme):
                 chol_bilinear_e[imode*2+1] = Lga[imode] * fac
                 chol_bilinear_b[imode*2+1] = - fac * Bfac[imode]
     else:
-        # YZ: This is wrong, DON'T USE IT!!!
-        chol_bilinear_e = backend.zeros((nmodes, nao, nao), dtype=complex)
-        chol_bilinear_b = backend.zeros(nmodes, dtype=complex)
-        for imode in range(nmodes):
-            if backend.linalg.norm(Lga[imode]) > 1.0e-10:
-                # term 1: A_\alpha \hat{F}_\alpha + B_\alpha \hat{B}_\alpha
-                # these operator corresponds to the same AF and same random number
-                chol_bilinear_e[imode] = Lga[imode]
-                chol_bilinear_b[imode] = Bfac[imode]
+        raise ValueError("Decouple scheme not fund!")
 
     return [chol_bilinear_e, chol_bilinear_b]
 
@@ -416,7 +407,6 @@ def get_h1e_chols_cas(
     nchol = ltensors_ao.shape[0]
 
     # Apply CAS filter to get CAS Hamiltonian
-    # TODO: fix the energy in the OAO format (current implementation in OAO is incorrect)
 
     # Normalize to spin form
     C_ao_a, C_ao_b = _as_spin_tuple(C_ao)

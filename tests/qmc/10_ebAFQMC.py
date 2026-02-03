@@ -21,7 +21,7 @@ def afqmc_energy_vs_lambda(
     qed=False,
     gmat=None,
     decouple=True,
-    verbose=4,
+    verbose=1,
 ):
     dt = 0.005
 
@@ -60,7 +60,6 @@ class Test_ebAFQMC(unittest.TestCase):
         time = 5.0
         nwalkers = 500
 
-        # mean_ref = -7.95415510 # coupled
         mean_ref = -7.9845657
 
         mol = get_mol(bond=bond)

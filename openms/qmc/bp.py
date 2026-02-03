@@ -97,11 +97,12 @@ def make_eri_op_from_xshift(dt, ltensor, xshift):
 
 
 def build_bp_left_states(ph: "Phaseless", trial, walkers, ltensor):
-    """
+    r"""
     Returns per-walker left Slaters after back-propagation through the
     buffered BP window. Shapes follow propagator objects:
-      - UHF: La: (nwalkers, nα, nao), Lb: (nwalkers, nβ, nao)
-      - RHF: L:  (nwalkers, nocc, nao)
+     - UHF: La: (nwalkers, nalpha, nao), Lb: (nwalkers, nbeta, nao)
+     - RHF: L:  (nwalkers, nocc, nao)
+
     Assumes trial holds right-trial Slaters; we conjugate-transpose to bras.
 
     TODO:
