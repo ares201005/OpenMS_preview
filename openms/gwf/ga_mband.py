@@ -320,6 +320,7 @@ class GASCF:
 
             # get Lmix contribution
             Dm = -L[K] - Lc[K]
+            Dm = Dm + Dm.conj().T
 
             # calculate renormalization based matrix
             P = np.zeros((M,M), dtype=np.complex128)
@@ -352,16 +353,13 @@ class GASCF:
                     # calculate contribution to the full derivative
                     Dm[y, z] += self._compute_derivative_energy(mo_coeff, DH)
 
-            # The correlation matrix Delta must be Hermitian
-            # therefore the derivative wrt Delta must also be Hermitian
-            # convergence can be improved by only considering the Hermitan part of the computed gradient
-            Dm = 0.5*(Dm + Dm.conj().T)
             grad_Delta.append(Dm)
 
         # return packed vector
-        return self._pack_vector(grad_phiarr, grad_L, grad_Lc, grad_Delta, grad_Ec)
+        f = lambda grad: [2*G.conj() for G in grad]
+        return self._pack_vector(f(grad_phiarr), f(grad_L), f(grad_Lc), f(grad_Delta), grad_Ec)
 
-    def kernel(self, method="krylov", maxiter=None, tolerance=1e-4, verbose=True):
+    def kernel(self, method="krylov", maxiter=None, tolerance=1e-6, verbose=True):
         # construct initial guess
         N = self.N
 
@@ -386,17 +384,20 @@ class GASCF:
 
         x0 = self._pack_vector(phiarr, L, Lc, Delta, Ec)
 
-        options = {'fatol':tolerance}
+        options = {}
         if maxiter:
             options['maxiter'] = maxiter
         if verbose:
             options['disp'] = True
+
+        options['fatol'] = tolerance
         result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
 
         phiarr, L, Lc, Delta, Ec = self._unpack_vector(result.x)
         print(f"Computed Ne = {sum(np.trace(Delta[I]) for I in range(N))}, self.Ne = {self.Ne}")
 
-        st()
+        print(result)
+        print(result.x)
 
         self._post_kernel()
 
@@ -428,7 +429,13 @@ def get_ga_model(N=12, filling=0.5, U=2.0, t=-1.0, PBC=True):
 
 if __name__ == '__main__':
     gamf = get_ga_model(PBC=False)
-    if (len(argv) == 2):
+    if (len(argv) == 1):
+        gamf.kernel()
+    elif (len(argv) == 2):
         gamf.kernel(method=argv[1])
+    elif (len(argv) == 3):
+        gamf.kernel(method=argv[1], tolerance=float(argv[2]))
+    elif (len(argv) == 4):
+        gamf.kernel(method=argv[1], tolerance=float(argv[2]), maxiter=int(argv[3]))
     else:
-        gamf.kernel(maxiter=500)
+        print(f"Usage: {argv[0]} [method] [tolerance] [maxiter]")
