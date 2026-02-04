@@ -283,11 +283,10 @@ class GASCF:
             HDqp = np.zeros((4**M, 4**M), dtype=np.complex128)
             for I in range(N):
                 ttIK = self._get_tt(I, K)
-                Delta_mixed = full_correlation[I*M:(I+1)*M, K*M:(K+1)*M]
-                M1 = ttIK.T @ R[I] @ Delta_mixed @ B
+                DeltaIK = full_correlation[I*M:(I+1)*M, K*M:(K+1)*M]
+                M1 = ttIK.T @ R[I] @ DeltaIK @ B.conj().T
                 HDqp += sum((M1[alpha, gamma] * np.kron(C[alpha], np.eye(2**M)) @ np.kron(np.eye(2**M), C[gamma])) for alpha in range(M) for gamma in range(M))
-            HDqp = HDqp + HDqp.T.conj()
-            HD += HDqp
+            HD += HDqp + HDqp.conj().T
 
             grad_phiarr.append(HD @ phiarr[K])
 
@@ -320,7 +319,6 @@ class GASCF:
 
             # get Lmix contribution
             Dm = -L[K] - Lc[K]
-            Dm = Dm + Dm.conj().T
 
             # calculate renormalization based matrix
             P = np.zeros((M,M), dtype=np.complex128)
@@ -345,25 +343,24 @@ class GASCF:
                     DH = np.zeros(Hqp.shape, dtype=np.complex128)
                     for I in range(N):
                         M1 = Y.T @ P.T @ self._get_tt(K, I) @ R[I].conj()
-                        M2 = R[I].T @ self._get_tt(I, K) @ P.conj() @ Y.T
                         for a in range(M):
                             for b in range(M):
                                 DH[K*M + a, I*M + b] += M1[a,b]
-                                DH[I*M + a, K*M + b] += M2[a, b]
                     # calculate contribution to the full derivative
                     Dm[y, z] += self._compute_derivative_energy(mo_coeff, DH)
 
             grad_Delta.append(Dm)
 
-        # return packed vector
+        # return packed vector wrt x and y derivatives
         f = lambda grad: [2*G.conj() for G in grad]
         return self._pack_vector(f(grad_phiarr), f(grad_L), f(grad_Lc), f(grad_Delta), grad_Ec)
 
     def kernel(self, method="krylov", maxiter=None, tolerance=1e-6, verbose=True):
-        # construct initial guess
         N = self.N
 
         # initialize all phi to uniformly id on each block (unentangled)
+        # L and Lc to 0 and Delta uniform identity on all sites
+        # Ec to 0
         phiarr = []
         L = []
         Lc = []
@@ -379,9 +376,7 @@ class GASCF:
             L.append(ZM.copy())
             Lc.append(ZM.copy())
             Delta.append((self.Ne/(N*M))*np.eye(M))
-        
         Ec = np.zeros(N)
-
         x0 = self._pack_vector(phiarr, L, Lc, Delta, Ec)
 
         options = {}
