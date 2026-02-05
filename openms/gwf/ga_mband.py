@@ -353,7 +353,8 @@ class GASCF:
 
         # return packed vector wrt x and y derivatives
         f = lambda grad: [2*G.conj() for G in grad]
-        return self._pack_vector(f(grad_phiarr), f(grad_L), f(grad_Lc), f(grad_Delta), grad_Ec)
+        g = lambda grad: [2*G for G in grad]
+        return self._pack_vector(g(grad_phiarr), f(grad_L), f(grad_Lc), f(grad_Delta), grad_Ec)
 
     def kernel(self, method="krylov", maxiter=None, tolerance=1e-6, verbose=True):
         N = self.N
