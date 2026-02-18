@@ -60,7 +60,9 @@ class Test_ebAFQMC(unittest.TestCase):
         time = 5.0
         nwalkers = 500
 
-        mean_ref = -7.9845657
+        # after bugfix in develop
+        # mean_ref = -7.9845657
+        mean_ref = -7.9203411
 
         mol = get_mol(bond=bond)
         cavity_freq, cavity_mode = get_cavity(1, gfac, pol_axis=2)
