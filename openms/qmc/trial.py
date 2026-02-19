@@ -135,11 +135,11 @@ import sys
 import time
 from abc import abstractmethod
 from pyscf import tools, lo, scf, fci
-from openms.lib.boson import Boson
+from openms.lib.boson import Boson, boson_state_exp
 from openms.lib import logger
 from openms.lib.logger import task_title
 from openms.lib.misc import deprecated
-from openms.lib import NUMBA_AVAILABLE #, QMCLIB_AVAILABLE
+from openms.lib import NUMBA_AVAILABLE  # , QMCLIB_AVAILABLE
 from openms.qmc import get_backend
 from openms.mqed.qedhf import RHF as QEDRHF
 
@@ -148,12 +148,7 @@ import numpy as np
 import h5py
 
 
-def half_rotate_integrals(
-    ncomponents,
-    psia,
-    psib,
-    h1e,
-    ltensor):
+def half_rotate_integrals(ncomponents, psia, psib, h1e, ltensor):
     r"""
     Perform half-rotation of integrals.
 
@@ -190,14 +185,20 @@ def half_rotate_integrals(
     """
 
     if len(psia.shape) != 3:
-        raise ValueError(f"'psia' must have 3 dimensions, but its shape is {psia.shape}")
+        raise ValueError(
+            f"'psia' must have 3 dimensions, but its shape is {psia.shape}"
+        )
     if ncomponents > 1:
         if len(psib.shape) != 3:
-            raise ValueError(f"'psib' must have 3 dimensions, but its shape is {psib.shape}")
+            raise ValueError(
+                f"'psib' must have 3 dimensions, but its shape is {psib.shape}"
+            )
     if len(h1e.shape) != 3:
         raise ValueError(f"'h1e' must have 3 dimensions, but its shape is {h1e.shape}")
     if len(ltensor.shape) != 3:
-        raise ValueError(f"'ltensor' must have 3 dimensions, but its shape is {ltensor.shape}")
+        raise ValueError(
+            f"'ltensor' must have 3 dimensions, but its shape is {ltensor.shape}"
+        )
 
     # nao = h1e.shape[-1]
     # nchol = ltensor.shape[0]
@@ -210,25 +211,28 @@ def half_rotate_integrals(
     # half-rotating chols
     # TODO: distributed MPI of rotating ltensor
     # shape of rotated chol: (numdet, nchol, nmo, nao)
-    rotated_ltensora = backend.einsum("Jpi, npq->Jnqi", psia.conj(), ltensor, optimize=True)
+    rotated_ltensora = backend.einsum(
+        "Jpi, npq->Jnqi", psia.conj(), ltensor, optimize=True
+    )
 
     rotated_h1b = None
     rotated_ltensorb = None
     if ncomponents > 1:
         rotated_h1b = backend.einsum("Jpi, pq->Jqi", psib.conj(), h1e[1])
-        rotated_ltensorb = backend.einsum("Jpi, npq->Jnqi", psib.conj(), ltensor, optimize=True)
+        rotated_ltensorb = backend.einsum(
+            "Jpi, npq->Jnqi", psib.conj(), ltensor, optimize=True
+        )
 
     # print(f"Debug: rotated_h1a.shape  = ", rotated_h1a.shape)
     # print(f"Debug: shape of original ltensor=  ", ltensor.shape)
     # print(f"Debug: rotated_h1a        =\n", rotated_h1a)
     # print(f"Debug: norm of rotated_h1a=  ", backend.linalg.norm(rotated_h1a))
     # print(f"Debug: norm of rotated_ltensora=  ", backend.linalg.norm(rotated_ltensora))
-    #if ncomponents > 1:
+    # if ncomponents > 1:
     #    print(f"Debug: norm of rotated_ltensorb=  ", backend.linalg.norm(rotated_ltensorb))
     #    print(f"Debug: shape of rotated ltensorb=  ", rotated_ltensorb.shape)
 
     return (rotated_h1a, rotated_h1b), (rotated_ltensora, rotated_ltensorb)
-
 
 
 #
@@ -248,7 +252,6 @@ if NUMBA_AVAILABLE:
         for z in prange(nw):
             ovlp[z] = phiw[z].T @ psi.conj().astype(np.complex128)
         return ovlp
-
 
     @njit(parallel=True, fastmath=True)
     def trial_walker_ovlp_gf_base_numba(phiw, psi):
@@ -356,6 +359,7 @@ def calc_walker_gf(walker, trial, ovlp):
 # if QMCLIB_AVAILABLE:
 if get_backend() == "qmclib":
     from openms.lib import _qmclib
+
     trial_walker_ovlp_base_kernel = _qmclib.trial_walker_ovlp_base
     trial_walker_ovlp_gf_base_kernel = _qmclib.trial_walker_ovlp_gf_base
 # elif NUMBA_AVAILABLE:
@@ -382,7 +386,9 @@ def calc_trial_walker_ovlp(walker, trial):
         Overlap between walker and trial
     """
     # slogdet: sign and (natural) logarithm of the determinant of an array.
-    ovlp_a = trial_walker_ovlp_base_kernel(walker.phiwa, trial.psia.astype(np.complex128))
+    ovlp_a = trial_walker_ovlp_base_kernel(
+        walker.phiwa, trial.psia.astype(np.complex128)
+    )
     sign_a, logovlp_a = backend.linalg.slogdet(ovlp_a)
     if trial.ncomponents > 1:
         ovlp_b = trial_walker_ovlp_base(walker.phiwb, trial.psib.astype(np.complex128))
@@ -415,7 +421,9 @@ def calc_trial_walker_ovlp_gf(walker, trial, return_signs=False):
         Overlap between walker and trial
     """
 
-    ovlp_a, walker.Ghalfa = trial_walker_ovlp_gf_base_kernel(walker.phiwa, trial.psia.astype(np.complex128))
+    ovlp_a, walker.Ghalfa = trial_walker_ovlp_gf_base_kernel(
+        walker.phiwa, trial.psia.astype(np.complex128)
+    )
     sign_a, logovlp_a = backend.linalg.slogdet(ovlp_a)
 
     # TODO: test the code without half_rotation
@@ -432,18 +440,25 @@ def calc_trial_walker_ovlp_gf(walker, trial, return_signs=False):
 
         # compute overlap: size [nwalkers]
         walker.boson_ovlp = trial.boson_ovlp_with_walkers(walker)
-        inv_ovlp = 1.0 / walker.boson_ovlp
+        walker.boson_Gf = trial.boson_green_function(walker)
+        # inv_ovlp = 1.0 / walker.boson_ovlp
         # <n'_1, ..., n'_i, ..., n'_N |a^\dag_i a_j| n_1, ..., n_j, ..., n_N>
+        # walker.boson_Gf = backend.einsum(
+        #    "wam, an, a -> wamn", walker.boson_phiw, trial.boson_psi.conj(), inv_ovlp
+        # )
 
         # <n|a^\dag a|m> elements
         # walker.boson_Ghalf = backend.einsum("zN, z->zN", walker.boson_phiw, inv_ovlp)
-        walker.boson_Ghalf = walker.boson_phiw * inv_ovlp[:, None]
-        walker.boson_Gf = backend.einsum("zM, N->zMN", walker.boson_Ghalf, trial.boson_psi.conj())
-
+        # walker.boson_Ghalf = walker.boson_phiw * inv_ovlp[:, None]
+        # walker.boson_Gf = backend.einsum(
+        #    "zM, N->zMN", walker.boson_Ghalf, trial.boson_psi.conj()
+        # )
 
     sign_b = None
     if trial.ncomponents > 1:
-        ovlp_b, walker.Ghalfb = trial_walker_ovlp_gf_base(walker.phiwb, trial.psib.astype(np.complex128))
+        ovlp_b, walker.Ghalfb = trial_walker_ovlp_gf_base(
+            walker.phiwb, trial.psib.astype(np.complex128)
+        )
         sign_b, logovlp_b = backend.linalg.slogdet(ovlp_b)
         if not trial.half_rotated:
             walker.Gb = backend.einsum("pi, nqi->npq", trial.psib.conj(), walker.Ghalfb)
@@ -461,6 +476,7 @@ def calc_trial_walker_ovlp_gf(walker, trial, return_signs=False):
 #
 # ****** functions for computing trial_walker overlap in MSD formalism ******
 #
+
 
 def calc_ovlp_iexc(exc_order, Gf, cre_idx, anh_idx, occ_map, nao_frozen):
     r"""Order `exc_order` excitaiton's contribution to the trial_walker overlap
@@ -508,7 +524,7 @@ def compute_MSD_ovlp(GFs, trial):
     ovlp_a = backend.ones((nwalkers, ndets), dtype=backend.complex128)
     ovlp_b = backend.ones((nwalkers, ndets), dtype=backend.complex128)
 
-    #for iexc in range(1, trial.max_exc):
+    # for iexc in range(1, trial.max_exc):
     #    tmp_ovlps = calc_ovlp_iexc(iexc, Ga, trial.cre_ex_a, trial.anh_ex_a, trial.occ_map_a, trial.nao_frozen)
     #    #ovlp_a[trial.exc_map_a[iexc], :] = tmp_ovlps[0]
     #    #ovlp_b[trial.exc_map_b[iexc], :] = tmp_ovlps[1]
@@ -541,7 +557,6 @@ def calc_MSD_trial_walker_ovlp(walker, trial):
 
     return ovlp0
     # raise NotImplementedError("Trail_Walker overlap with MSD is not implemented yet.")
-
 
 
 def calc_MSD_trial_walker_ovlp_gf(walker, trial):
@@ -601,26 +616,35 @@ def permutation_sign(anh_idx, cre_idx, ref_det, target_det):
         perm += io - nmove
         nmove += 1
 
-    if perm % 2 == 1: return -1
+    if perm % 2 == 1:
+        return -1
     return 1
 
 
-
-def initialize_boson_trial_with_z(zalpha, boson_states):
-    # TODO: change dimension to [nmodes, max_occ] instead of
-    # 1D array
+def initialize_boson_trial_with_z(
+    zalpha: backend.ndarray, dim_fock: int
+) -> backend.ndarray:
     from math import factorial
 
     nmodes = len(zalpha)
     coefficients = []
     for imode in range(nmodes):
-        for n in range(boson_states[imode]):
+        coeff_alpha = []
+        for n in range(dim_fock):
             alpha = zalpha[imode]
-            coeff = (backend.exp(-backend.abs(alpha)**2 / 2) * (alpha**n) / backend.sqrt(factorial(n)))
-            coefficients.append(coeff)
+            coeff = (
+                backend.exp(-backend.abs(alpha) ** 2 / 2)
+                * (alpha**n)
+                / backend.sqrt(factorial(n))
+            )
+            coeff_alpha.append(coeff)
+            # coefficients.append(coeff)
+        thenorm = backend.sqrt(backend.sum(backend.abs(coeff_alpha) ** 2))
+        coefficients.append(coeff_alpha / thenorm)
     coefficients = backend.array(coefficients)
-    norm_factor = backend.sqrt(backend.sum(backend.abs(coefficients)**2))
-    return coefficients / norm_factor
+    # norm_factor = backend.sqrt(backend.sum(backend.abs(coefficients) ** 2))
+    return coefficients / backend.sqrt(nmodes)  # / norm_factor
+
 
 class TrialWFBase(object):
     r"""
@@ -702,9 +726,11 @@ class TrialWFBase(object):
         logger.note(self, f" Number of beta electrons     : {self.nbeta: 5d}")
         if isinstance(self.mol, Boson):
             logger.note(self, f" Number of bosonic models     : {self.mol.nmodes}")
-            logger.note(self, f" Number of bosonic states     : {self.mol.nboson_states}")
+            logger.note(self, f" Modes' Fock space dimensions : {self.mol.dim_fock}")
+            logger.note(
+                self, f" Number of bosonic states     : {self.mol.nboson_states}"
+            )
         logger.note(self, f"")
-
 
     @abstractmethod
     def build(self):
@@ -731,16 +757,13 @@ class TrialWFBase(object):
         r"""Compute the force bias"""
         pass
 
-
     @abstractmethod
     def half_rotate_integrals(self, h1e, ltensor):
         pass
 
-
     def initialize_boson_trial_with_z(self, zalpha, boson_states):
         self.boson_psi = initialize_boson_trial_with_z(zalpha, boson_states)
         logger.info(self, f"updated boson_psi is {self.boson_psi}")
-
 
 
 # single determinant HF trial wavefunction
@@ -775,7 +798,7 @@ class TrialHF(TrialWFBase):
         else:
             nmo = self.mf.mo_coeff.shape[-1]
             tmp = backend.identity(nmo)[:, self.mf.mo_occ > 0]
-            #self.psia = self.psib = tmp
+            # self.psia = self.psib = tmp
             # psia and psib may have different size, when nalpha and nbeta are different
             self.psia = tmp[:, self.nalpha]
             self.psib = tmp[:, self.nbeta]
@@ -789,7 +812,9 @@ class TrialHF(TrialWFBase):
             # TODO: build Fermionic Gf and Ghalf in SO
             # TODO: the new function trial_walker_gf can computer such green's functions
             # TODO: may longer need the GF_so function
-            self.Gf, self.Gf_half = estimators.GF_so(self.psi, self.psi, self.nalpha, self.nbeta)
+            self.Gf, self.Gf_half = estimators.GF_so(
+                self.psi, self.psi, self.nalpha, self.nbeta
+            )
         else:
             self.psi = self.psia
             self.Gf, self.Gf_half = estimators.GF_so(self.psi, self.psi, self.nalpha, 0)
@@ -803,7 +828,7 @@ class TrialHF(TrialWFBase):
         #    f["trial"] = self.psi
 
     def half_rotate_integrals(self, h1e, ltensor):
-        r""" rotate h1e and ltensor by half
+        r"""rotate h1e and ltensor by half
 
         Shape of rotated ltensor is [nchol, nao, ]
         """
@@ -814,10 +839,16 @@ class TrialHF(TrialWFBase):
         nao = self.psia.shape[0]
         nchol = ltensor.shape[0]
         psia = self.psia.reshape(self._numdets, nao, self.nalpha)
-        psib = None if self.ncomponents == 1 else self.psib.reshape(self._numdets, nao, self.nbeta)
+        psib = (
+            None
+            if self.ncomponents == 1
+            else self.psib.reshape(self._numdets, nao, self.nbeta)
+        )
 
         # rh1e and rltensor are both tuple of alpha and beta components
-        rotated_h1e, rltensor = half_rotate_integrals(self.ncomponents, psia, psib, h1e, ltensor)
+        rotated_h1e, rltensor = half_rotate_integrals(
+            self.ncomponents, psia, psib, h1e, ltensor
+        )
         # logger.debug(self, f"Debug: shape of rotated_h1e {rotated_h1e[0].shape}")
         # logger.debug(self, f"Debug: shape of rotated ltensor {rltensor[0].shape}")
 
@@ -832,14 +863,11 @@ class TrialHF(TrialWFBase):
         logger.info(self, f"Time to rotate integrals is:    {time.time() - t0: 9.4f}")
         logger.info(self, task_title("half rotate integrals ... Done!"))
 
-
     def calc_gf(self, walkers):
-        r""" TODO: calculate the green's function with walkers
-        """
-        #for w in range(walkers.nwalkers):
+        r"""TODO: calculate the green's function with walkers"""
+        # for w in range(walkers.nwalkers):
         #    ovlp = numpy.dot(...
         pass
-
 
     def ovlp_with_walkers(self, walkers):
         r"""Compute the overlap between trial and walkers:
@@ -860,21 +888,73 @@ class TrialHF(TrialWFBase):
 
         return calc_trial_walker_ovlp(walkers, self)
 
-
     def boson_ovlp_with_walkers(self, walkers):
-        sb = None
-        # for many-bosons, there should be a permenant
-        if walkers.boson_phiw is not None:
-            sb = backend.dot(walkers.boson_phiw, self.boson_psi.conj())
-            # sb = backend.einsum("N, zN->z", self.boson_psi.conj(), walkers.boson_phiw)
-        return sb
+        r"""Compute the overlap
 
+        .. math::
+            \langle \Psi^T \vert \phi^w \rangle =
+            \sum_\alpha \langle \Psi_\alpha^T \vert \phi_\alpha^w \rangle
+
+        between the bosonic trial wavefunction :math:`\lvert \Psi_T \rangle`
+        and the walker wavefunctions :math:`\lvert \phi_w \rangle`,
+        with noninteracting bosonic modes :math:`\alpha`.
+
+        Parameters
+        ----------
+        self.boson_psi : numpy.ndarray
+            The trial wavefunction; boson_psi.shape = (nmodes, dim_fock)
+        walkers.boson_phiw : numpy.ndarray
+            The walker wavefunctions; boson_phiw.shape = (nwalkers, nmodes, dim_fock)
+
+        Returns
+        -------
+        ovlp : numpy.ndarray
+            The overlap of each walker; ovlp.shape = (nwalkers, )
+        """
+        ovlp = None
+        # for many-bosons, there should be a permanent
+        if walkers.boson_phiw is not None:
+            ovlp = backend.einsum(
+                "am, wan -> w", self.boson_psi.conj(), walkers.boson_phiw
+            )
+            # sb = backend.dot(walkers.boson_phiw, self.boson_psi.conj())
+            # sb = backend.einsum("N, zN->z", self.boson_psi.conj(), walkers.boson_phiw)
+        return ovlp
+
+    def boson_green_function(self, walkers) -> backend.ndarray:
+        r"""Compute the walkers' bosonic Green function
+
+        .. math::
+            G^w = \bigotimes_\alpha
+                \frac{\lvert \phi_\alpha^w \rangle\!\langle \Psi_\alpha^T \rvert}
+                     {\sum_\alpha \langle \phi_\alpha^w \vert \Psi_\alpha^T},
+
+        where :math:`\alpha` indexes (noninteracting) modes,
+        :math:`\lvert \phi_w \rangle` is the walker wavefunction, and
+        :math:`\lvert \Psi_T \rangle` is the trial wavefunction.
+
+        Parameters
+        ----------
+        self.boson_psi : numpy.ndarray
+            The trial wavefunction; boson_psi.shape = (nmodes, dim_fock)
+        walkers.walker_phi : numpy.ndarray
+            The walker wavefunctions; walker_phi.shape = (nwalker, nmodes, dim_fock)
+
+        Returns
+        -------
+        boson_Gf : numpy.ndarray
+            The walkers' bosonic Green functions;
+            boson_Gf.shape = (nwalker, nmodes, dim_fock, dim_fock).
+        """
+        inv_ovlp = 1.0 / self.boson_ovlp_with_walkers(walkers)
+        boson_Gf = backend.einsum(
+            "wam, an, w -> wamn", walkers.boson_phiw, self.boson_psi.conj(), inv_ovlp
+        )
+        return boson_Gf
 
     def ovlp_with_walkers_gf(self, walkers):
-        r"""compute trial_walker overlap and green's function
-        """
+        r"""compute trial_walker overlap and green's function"""
         return calc_trial_walker_ovlp_gf(walkers, self)
-
 
     def get_vbias(self, walkers, ltensor, verbose=False):
         r"""compute the force bias without constructing the big TL_theta tensor
@@ -905,22 +985,46 @@ class TrialHF(TrialWFBase):
         # shape of rotated ltensor : [nchol, nao, nalpha]
 
         # vbias = (2.0 / self.ncomponents) * backend.einsum("nqi, zqi->zn", self.rltensora, walkers.Ghalfa)
-        vbias = (2.0 / self.ncomponents) * backend.tensordot(walkers.Ghalfa, self.rltensora, axes=([1, 2], [1, 2]))
+        vbias = (2.0 / self.ncomponents) * backend.tensordot(
+            walkers.Ghalfa, self.rltensora, axes=([1, 2], [1, 2])
+        )
         if self.ncomponents > 1:
             # vbias += backend.einsum("nqi, zqi->zn", self.rltensorb, walkers.Ghalfb)
-            vbias += backend.tensordot(walkers.Ghalfb, self.rltensorb, axes=([1, 2], [1, 2]))
-        return vbias # Gf, vbias
-
+            vbias += backend.tensordot(
+                walkers.Ghalfb, self.rltensorb, axes=([1, 2], [1, 2])
+            )
+        return vbias  # Gf, vbias
 
     def get_boson_vbias(self, walkers, chols):
-        r"""Compute the force bias for bosons"""
+        r"""Compute the force bias for bosons:
+
+            .. math::
+                V_\gamma^w = \sum_\alpha \mathrm{Tr}\,
+                    \left[ L_{\gamma, \alpha} G_\alpha^w \right],
+
+        where :math:`L_{\gamma, \alpha}` is the :math:`\alpha` mode component
+        of the bosonic Cholesky tensor :math:`L_\gamma`, and
+        :math:`w` indexes the walkers.
+
+        Parameters
+        ----------
+        chols : numpy.ndarray
+            The bosonic Cholesky tensors (one-body operators).
+            chols.shape = (nchols, nmodes, dim_fock, dim_fock)
+        walkers.boson_Gf : numpy.ndarray
+            The walkers' boson Green functions;
+            boson_Gf.shape = (nwalkers, nmodes, dim_fock, dim_fock)
+
+        Returns
+        -------
+        vbias : numpy.ndarray
+            The force bias; vbias.shape = (nwalkers, nchols)
+        """
+
+        return backend.einsum("camn, wamn -> wc", chols, walkers.boson_Gf)
         # chols shape: (nfield, nfock, nfock)
         # boson_Gf shape: (nwalkers, nfock, nfock)
-
-        vbias = backend.einsum("nMN, zMN->zn", chols, walkers.boson_Gf)
-        # vbias = backend.einsum("nMN, zN->zn", chols, walkers.boson_Gf)
-        return vbias
-
+        # vbias = backend.einsum("nMN, zMN->zn", chols, walkers.boson_Gf)
 
     @deprecated
     def force_bias(self, walkers, TL_tensor, verbose=False):
@@ -965,7 +1069,9 @@ class TrialHF(TrialWFBase):
         overlap = self.ovlp_with_walkers(walkers)
         inv_overlap = backend.linalg.inv(overlap)
 
-        logger.debug(self, "\nnorm of walker overlap: %15.8f", backend.linalg.norm(overlap))
+        logger.debug(
+            self, "\nnorm of walker overlap: %15.8f", backend.linalg.norm(overlap)
+        )
         # theta is the Ghalf
         theta = backend.einsum("zqp, zpr->zqr", walkers.phiw, inv_overlap)
 
@@ -981,6 +1087,10 @@ class TrialHF(TrialWFBase):
         # vbias = backend.einsum("znpp->zn", TL_theta)
 
         # bosonic part
+        # 2026-02-18 jzw: new shape
+        # boson_ovlp.shape = (nwalker, ); einsum index z
+        # boson_phiw.shape = (nwalker, nmode, dim_fock); einsum indices zam
+        # boson_psi.shape = (nmode, dim_fock); einsum indices an
         if self.boson_psi is not None:
             # phi_{w, pi} Psi^T_{pj} --> zij, if i, j is only 1
             # then ovlp_b is phi_{z,F} \Psi^T_{F} -> z
@@ -989,9 +1099,13 @@ class TrialHF(TrialWFBase):
             #  [boson_Ghalf]_{z,Fj} * Psi_{F'j} -> G_{FF'}
 
             walkers.boson_ovlp = trial.boson_ovlp_with_walkers(walkers)
-            inv_ovlp = 1.0 / walkers.boson_ovlp
-            theta = backend.einsum("zN, z->zN", walkers.boson_phiw, inv_ovlp)
-            boson_Gf = backend.einsum("zM, N->zMN", theta, self.boson_psi.conj())
+            boson_Gf = self.boson_green_function(walkers)
+            # inv_ovlp = 1.0 / walkers.boson_ovlp
+            # boson_Gf = backend.einsum(
+            #    "wam, an, wamn", walkers.boson_phiw, self.boson_psi.conj(), inv_ovlp
+            # )
+            # theta = backend.einsum("zN, z->zN", walkers.boson_phiw, inv_ovlp)
+            # boson_Gf = backend.einsum("zM, N->zMN", theta, self.boson_psi.conj())
             return [Gf, boson_Gf], TL_theta
 
         return Gf, TL_theta
@@ -1013,7 +1127,9 @@ class TrialUHF(TrialWFBase):
         xinv = backend.linalg.inv(Xmat)  # S**(-1/2)
 
         # TODO: name change MO_ALPHA/beta -> psia/b
-        MO_ALPHA = self.mf.mo_coeff[0, :, : self.mol.nelec[0]]  # Occupied ALPHA MO Coeffs
+        MO_ALPHA = self.mf.mo_coeff[
+            0, :, : self.mol.nelec[0]
+        ]  # Occupied ALPHA MO Coeffs
         MO_BETA = self.mf.mo_coeff[1, :, : self.mol.nelec[1]]  # Occupied BETA MO Coeffs
 
         self.psi = [
@@ -1033,11 +1149,9 @@ class TrialUHF(TrialWFBase):
             self.psi, self.psi, self.nalpha, self.nbeta
         )
 
-
     def ovlp_with_walkers(self, walkers):
         r"""Compute the overlap with walkers"""
         super().ovlp_with_walkers(walkers)
-
 
     @deprecated
     def force_bias(self, walkers, TL_tensor, verbose=False):
@@ -1070,7 +1184,7 @@ class TrialUHF(TrialWFBase):
         # vbias = backend.einsum("npq, zqr->znpr", TL_tensor, Ghalfa)
 
 
-def get_ci(mol, cas, ci_thresh=1.e-8):
+def get_ci(mol, cas, ci_thresh=1.0e-8):
     from pyscf import mcscf, fci
 
     # TODO: use UHF if openshell system
@@ -1097,7 +1211,9 @@ def get_ci(mol, cas, ci_thresh=1.e-8):
     # logger.debug(mol, f"cassc.mo_coeff = {mc.mo_coeff}")
 
     coeff, occa, occb = zip(
-        *fci.addons.large_ci(fcivec, ncas, (nelecasa, nelecasb), tol=ci_thresh, return_strs=False)
+        *fci.addons.large_ci(
+            fcivec, ncas, (nelecasa, nelecasb), tol=ci_thresh, return_strs=False
+        )
     )
     # may need to return mc, instead of mf
     return mf, coeff, occa, occb
@@ -1109,10 +1225,13 @@ class multiCI(TrialWFBase):
     Here, we construct the Trial WF based on PySCF CASSCF calculations
 
     """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.header = "MSD_UHF"
-        self.ncomponents = 2 # FIXME: decide whether to consider 1 component in this trial class
+        self.ncomponents = (
+            2  # FIXME: decide whether to consider 1 component in this trial class
+        )
 
         self.cas = kwargs.get("cas", None)  # active space (norbital, nelectron)
         self.use_cas = kwargs.get("use_cas", True)
@@ -1141,9 +1260,9 @@ class multiCI(TrialWFBase):
         # update other parameters
         #
         self.max_numdets = len(ci_coeffs)
-        if self._numdets < 0: self._numdets = self.max_numdets
+        if self._numdets < 0:
+            self._numdets = self.max_numdets
         assert self._numdets <= self.max_numdets
-
 
         logger.info(self, f"Info: num_dets = {self._numdets:8d}")
         logger.info(self, f"Info: max_num_dets = {self.max_numdets:8d}")
@@ -1152,7 +1271,7 @@ class multiCI(TrialWFBase):
         # occa/b are:
 
         self.nalpha_cas = len(occa[0])
-        self.nbeta_cas= len(occb[0])
+        self.nbeta_cas = len(occb[0])
         assert self.nalpha_cas <= self.nalpha
         assert self.nbeta_cas <= self.nbeta
         logger.info(self, f"Info: nalpha_cas in the multiCI trial: {self.nalpha_cas}")
@@ -1169,25 +1288,36 @@ class multiCI(TrialWFBase):
         # then we need to update the way of adding frozen orbitals (not continuous in orbtails as well) accordingly
         if self.frozen_a > 0:
             frozen_core = [i for i in range(self.frozen_a)]
-            occa = [backend.array(frozen_core + [o + self.frozen_a for o in oa]) for oa in occa]
-            occb = [backend.array(frozen_core + [o + self.frozen_b for o in ob]) for ob in occb]
+            occa = [
+                backend.array(frozen_core + [o + self.frozen_a for o in oa])
+                for oa in occa
+            ]
+            occb = [
+                backend.array(frozen_core + [o + self.frozen_b for o in ob])
+                for ob in occb
+            ]
 
         # select the first _numdets determinents
-        occa = occa[:self._numdets]
-        occb = occb[:self._numdets]
+        occa = occa[: self._numdets]
+        occb = occb[: self._numdets]
 
         dets = [list(a) + [i + self.nao for i in c] for (a, c) in zip(occa, occb)]
-        self.occ_so = [backend.sort(d) for d in dets] # occs in spin orbital (SO)
+        self.occ_so = [backend.sort(d) for d in dets]  # occs in spin orbital (SO)
 
-        self.occa = backend.array(occa[:self._numdets], dtype=backend.int32)
-        self.occb = backend.array(occb[:self._numdets], dtype=backend.int32)
-        self.coeffs = backend.array(ci_coeffs[:self._numdets], dtype=backend.complex128)
+        self.occa = backend.array(occa[: self._numdets], dtype=backend.int32)
+        self.occb = backend.array(occb[: self._numdets], dtype=backend.int32)
+        self.coeffs = backend.array(
+            ci_coeffs[: self._numdets], dtype=backend.complex128
+        )
 
         # print("\n dets = \n", dets)
         logger.debug(self, f"Debug: occa = {self.occa}")
         logger.debug(self, f"Debug: occb = {self.occb}")
         logger.debug(self, f"Debug: ci_coeffs = {self.coeffs}")
-        logger.info(self, f"Info: number of freezing electrons = {self.frozen_a} {self.frozen_b}")
+        logger.info(
+            self,
+            f"Info: number of freezing electrons = {self.frozen_a} {self.frozen_b}",
+        )
 
         if self.use_cas:
             self.nao_cas = max_orbital
@@ -1208,7 +1338,6 @@ class multiCI(TrialWFBase):
         logger.info(self, f" Number of cas orbitals       : {self.nao_cas:5d}")
         logger.info(self, f" Number of frozen orbitals    : {self.nao_frozen:5d}")
 
-
     def build(self):
         r"""build multiCI trial WF"""
 
@@ -1224,17 +1353,13 @@ class multiCI(TrialWFBase):
             boson_size = sum(self.mol.nboson_states)
 
     def ovlp_with_walkers_gf(self, walkers):
-        r"""compute trial_walker overlap and green's function
-        """
+        r"""compute trial_walker overlap and green's function"""
         return calc_MSD_trial_walker_ovlp_gf(walkers, self)
 
-
     def ovlp_with_walkers(self, walkers):
-        r"""Compute the overlap between trial and walkers (MDS)
-        """
+        r"""Compute the overlap between trial and walkers (MDS)"""
 
         return calc_MSD_trial_walker_ovlp(walkers, self)
-
 
     def get_vbias(self, walkers, ltensor, verbose=False):
         r"""compute the force bias without constructing the big TL_theta tensor
@@ -1249,11 +1374,12 @@ class multiCI(TrialWFBase):
 
         # may make multiCi as inheritance of TrialHF instead of TrialWFBase so that
         # it can inherits the TrialHF functions
-        vbias = (2.0 / self.ncomponents) * backend.einsum("nqi, zqi->zn", self.rltensora, walkers.Ghalfa)
+        vbias = (2.0 / self.ncomponents) * backend.einsum(
+            "nqi, zqi->zn", self.rltensora, walkers.Ghalfa
+        )
         if self.ncomponents > 1:
             vbias += backend.einsum("nqi, zqi->zn", self.rltensorb, walkers.Ghalfb)
         return vbias
-
 
     @deprecated
     def force_bias(self, walkers):
@@ -1279,7 +1405,7 @@ class multiCI(TrialWFBase):
 # define joint fermion-boson trial
 # =====================================
 
-#from openms.qmc.trial_boson import *
+# from openms.qmc.trial_boson import *
 
 
 class trial_EPH(object):
@@ -1321,21 +1447,24 @@ def make_trial(mol, mf=None, **kwargs):
     logger.debug(trial, f"Debug: trial WF is {trial.psi}")
 
     if isinstance(mol, Boson):
+        trial.boson_psi = boson_state_exp(mol.nmodes, mol.dim_fock)
         # here, we temporarily append trial WF for boson into the trial
         # set the initial condition according to Z (TBA)
-        boson_size = sum(mol.nboson_states)
+        # boson_size = sum(mol.nboson_states)
         # trial.boson_psi = backend.zeros(boson_size)
         # trial.boson_psi[0] = 1.0 # / backend.sqrt(boson_size)
         # trial.boson_psi[:] = 1.0 / backend.sqrt(boson_size)
 
         # <n_1, n_2, ..., n_i, ..., n_N | a^\dag_i a_j |m_1, m_2, ..., m_j, ..., m_N>
         # store |n_1, n_2, ..., n_i, ..., n_N> in 1D array
-        nocc = backend.array([i for j in range(mol.nmodes) for i in range(mol.nboson_states[j])])
-        trial.boson_psi = backend.exp(-nocc)
-        trial.boson_psi = trial.boson_psi / backend.linalg.norm(trial.boson_psi)
+        # nocc = backend.array(
+        #    [i for j in range(mol.nmodes) for i in range(mol.nboson_states[j])]
+        # )
+        # trial.boson_psi = backend.exp(-nocc)
+        # trial.boson_psi = trial.boson_psi / backend.linalg.norm(trial.boson_psi)
 
         # return trial
-    #else:
+    # else:
     #    return trial
 
     # else:

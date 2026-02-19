@@ -21,7 +21,7 @@ def afqmc_energy_vs_lambda(
     qed=False,
     gmat=None,
     decouple=True,
-    verbose=1,
+    verbose=5,
 ):
     dt = 0.005
 

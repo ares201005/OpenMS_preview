@@ -56,7 +56,7 @@ from . import generic_walkers as gwalker
 from . import tools
 
 from openms.__mpi__ import MPI, original_print
-from openms.lib import logger
+from openms.lib import logger, deprecated
 from openms.lib.logger import task_title
 from openms.lib.boson import Boson
 from openms.qmc.trial import make_trial, multiCI
@@ -124,7 +124,9 @@ def kernel(mc, propagator=None, trial=None):
     energy_list = []
     time_list = []
     wall_t0 = time.time()
-    logstring = f"{'Step':^8}{'Etot':^16}{'Raw_Etot':^16}{'Norm':^14}{'E1':^16}{'E2':^16}"
+    logstring = (
+        f"{'Step':^8}{'Etot':^16}{'Raw_Etot':^16}{'Norm':^14}{'E1':^16}{'E2':^16}"
+    )
     if isinstance(propagator, PhaselessElecBoson):
         logstring += f"{'Eb':^16}{'Eg':^16}"
     logstring += "   Wall_time"
@@ -135,9 +137,7 @@ def kernel(mc, propagator=None, trial=None):
         t0 = time.time()
         tt = mc.dt * step
         dump_result = step % mc.print_freq == 0
-        logger.debug(
-            mc, f"\nDebug: -------------- qmc step {step} -----------------"
-        )
+        logger.debug(mc, f"\nDebug: -------------- qmc step {step} -----------------")
 
         # step 0): periodic re-orthogonalization
         # (FIXME: whether put this at the begining or end, in principle, should not matter)
@@ -168,7 +168,9 @@ def kernel(mc, propagator=None, trial=None):
         # mc.measurements(walkers, step)
         if (step + 1) % mc.property_calc_freq == 0:
             # Compute energies and other observables
-            energies = propagator.local_energy(h1e, ltensor, walkers, trial, enuc=mc.nuc_energy)
+            energies = propagator.local_energy(
+                h1e, ltensor, walkers, trial, enuc=mc.nuc_energy
+            )
             energy = energies[0] / energies[1]
 
             # Append time and energy to respective lists
@@ -248,6 +250,7 @@ class QMCbase(object):
         mpi_comm = kwargs.get("mpi_comm", None)
         if mpi_comm is None:
             from openms.__mpi__ import MPI, CommType, MPIWrapper
+
             self._mpi = MPIWrapper()
 
         # io params
@@ -280,15 +283,18 @@ class QMCbase(object):
         # 2) pass a bare molecule object but with fermion-boson coupling matrix
 
         self.geb = None  # TODO: optimize the handling of geb
-        self.fbinteraction = False # whether this is fermion-boson mixture
-        if not isinstance(self.system, Boson): # only check boson_freq is system itself not a boson object
+        self.fbinteraction = False  # whether this is fermion-boson mixture
+        if not isinstance(
+            self.system, Boson
+        ):  # only check boson_freq is system itself not a boson object
             boson_freq = kwargs.get("boson_freq", None)
             if boson_freq is not None:
                 self.system.boson_freq = boson_freq
                 self.system.nmodes = len(self.system.boson_freq)
                 nphoton = kwargs.get("nphoton", 3)
                 self.system.gmat = kwargs.get("gmat", None)
-                self.system.nboson_states =  [nphoton for i in range(self.system.nmodes)]
+                self.system.nboson_states = [nphoton for i in range(self.system.nmodes)]
+                self.system.dim_fock = max(self.system.nboson_states)
                 # print("boson_freq = ", self.system.boson_freq.shape, self.system.boson_freq)
                 # print("gmat = ", self.system.gmat)
                 self.fbinteraction = True
@@ -333,7 +339,9 @@ class QMCbase(object):
         self.batched = kwargs.get("batched", True)
 
         # parameters for walker weight control
-        self.pop_control_freq = kwargs.get("pop_control_freq", 5)  # weight control frequency
+        self.pop_control_freq = kwargs.get(
+            "pop_control_freq", 5
+        )  # weight control frequency
         self.pop_control_method = kwargs.get("pop_control_method", None)
 
         # other variables for Hamiltonian
@@ -347,9 +355,9 @@ class QMCbase(object):
             "energy_scheme": self.energy_scheme,
             "taylor_order": self.taylor_order,
             # electron-boson_mixture
-            "decouple_bilinear" : False,
-            "decouple_scheme" : 1,
-            "turnoff_bosons" : False,
+            "decouple_bilinear": False,
+            "decouple_scheme": 1,
+            "turnoff_bosons": False,
             "quantizaiton": "second",
         }
 
@@ -390,7 +398,6 @@ class QMCbase(object):
         self.wt_io = 0.0
         self.wt_tot = 0.0
 
-
     def build(self):
         r"""
         Build up the afqmc calculations, including:
@@ -419,7 +426,7 @@ class QMCbase(object):
         trial_options = {
             "verbose": self.verbose,
             "stdout": self.stdout,
-            "trail_type": "RHF",
+            "trial_type": "RHF",
             "numdets": 1,
             "OAO": self.OAO,
             "uhf": self.uhf,
@@ -453,12 +460,18 @@ class QMCbase(object):
         )
         if self.geb is not None and not self.propagator_options["turnoff_bosons"]:
             zalpha = backend.einsum("Xpq, pq->X", self.geb, self.trial.Gf[0])
-            self.trial.initialize_boson_trial_with_z(zalpha, self.mol.nboson_states)
+            # self.trial.initialize_boson_trial_with_z(zalpha, self.mol.nboson_states)
+            self.trial.initialize_boson_trial_with_z(zalpha, self.mol.dim_fock)
             logger.debug(self, f"Debug: initial coherent state is  : {zalpha}")
-            logger.debug(self, f"Debug: initial bosonic trial WF is: {self.trial.boson_psi}")
+            logger.debug(
+                self,
+                f"Debug: initial bosonic trial WF is: {self.trial.boson_psi}, "
+                + f"with shape {self.trial.boson_psi.shape}",
+            )
         elif self.geb is not None and self.propagator_options["turnoff_bosons"]:
+            # vacuum state for each mode
             self.trial.boson_psi *= 0.0
-            self.trial.boson_psi[0] = 1.0
+            self.trial.boson_psi[:, 0] = 1.0 / backend.sqrt(self.system.nmodes)
 
         # 3) set up walkers
         t0 = time.time()
@@ -468,7 +481,9 @@ class QMCbase(object):
         # calculate green's function
         ovlp = self.trial.ovlp_with_walkers_gf(self.walkers)
         logger.debug(self, f"Debug: initial trial_walker overlap is\n {ovlp}")
-        logger.note(self, f"Setup walkers ... Done! Time used: {time.time()-t0: 7.3f} s")
+        logger.note(
+            self, f"Setup walkers ... Done! Time used: {time.time()-t0: 7.3f} s"
+        )
 
         # 4) prepare the propagator
         # TODO: may use a dict to switch different propagator
@@ -497,17 +512,16 @@ class QMCbase(object):
 
         self.propagator.build(self.h1e, self.ltensor, self.trial, self.geb)
 
-        wt_prop = time.time()-t0
-        logger.note(self,
+        wt_prop = time.time() - t0
+        logger.note(
+            self,
             task_title(f"Prepare propagator ... Done in {wt_prop: 7.3f} s"),
         )
-
 
     @abstractmethod
     def cast2backend(self):
         r"""cast the tensors to backend for following simulation"""
         raise NotImplementedError
-
 
     def dump_flags(self):
         r"""dump flags"""
@@ -539,12 +553,10 @@ class QMCbase(object):
         self.trial.dump_flags()
         self.walkers.dump_flags()
 
-
     def measurements(self, walkers, step):
         r"""masurement of physical observables, e.g., energies"""
 
         pass
-
 
     def get_integrals(self):
         r"""return oei, eri, and cholesky tensors in OAO or MO
@@ -570,7 +582,7 @@ class QMCbase(object):
         norb = Xmat.shape[0]
 
         g_AO = None
-        if self.fbinteraction: # isinstance(self.system, Boson):
+        if self.fbinteraction:  # isinstance(self.system, Boson):
             system = self.system
             # Add boson-mediated oei and eri:
             # shape [nm, nao, nao]
@@ -585,21 +597,28 @@ class QMCbase(object):
         mol = self.mol._mol if isinstance(self.mol, Boson) else self.mol
 
         g_ptr = None
-        if self.merge_g2eri: g_ptr = g_AO # create a pointer to g_AO
+        if self.merge_g2eri:
+            g_ptr = g_AO  # create a pointer to g_AO
 
         # get h1e, eri, ltensors in OAO/MO representation
         hcore, ltensor, self.nuc_energy = tools.get_h1e_chols(
-            mol, Xmat=Xmat, thresh=self.chol_thresh,
+            mol,
+            Xmat=Xmat,
+            thresh=self.chol_thresh,
             g=g_ptr,
             block_decompose_eri=self.block_decompose_eri,
         )
-        #print("Norm of ltensor is: ", backend.linalg.norm(ltensor))
+        # print("Norm of ltensor is: ", backend.linalg.norm(ltensor))
 
         # shape of h1e [nspin, nao, nao]
         h1e = backend.array([hcore for _ in range(self.ncomponents)])
         logger.debug(self, f"\nDebug: h1e.shape = {h1e.shape}")
-        logger.debug(self, f"Debug: hcore norm in OAO/MO = {backend.linalg.norm(h1e[0])}")
-        logger.debug(self, f"Debug: chol norm in OAO/MO  = {backend.linalg.norm(ltensor)}")
+        logger.debug(
+            self, f"Debug: hcore norm in OAO/MO = {backend.linalg.norm(h1e[0])}"
+        )
+        logger.debug(
+            self, f"Debug: chol norm in OAO/MO  = {backend.linalg.norm(ltensor)}"
+        )
 
         self.nbarefields = ltensor.shape[0]
         # with h5py.File("input.h5", "r+") as fa:
@@ -607,9 +626,9 @@ class QMCbase(object):
         #    fa["nuc_energy"] = self.nuc_energy
         #    fa["cholesky"] = ltensor
 
-        if self.fbinteraction: # isinstance(self.system, Boson):
+        if self.fbinteraction:  # isinstance(self.system, Boson):
             # add DSE contribution to h1e
-            oei_dse = 0.5 * backend.einsum('Xpq, Xqs->ps', g_OR, g_OR)
+            oei_dse = 0.5 * backend.einsum("Xpq, Xqs->ps", g_OR, g_OR)
             h1e += backend.array([oei_dse for _ in range(self.ncomponents)])
 
             if not self.merge_g2eri:
@@ -622,7 +641,9 @@ class QMCbase(object):
 
             # add terms due to decoupling of bilinear term
             if self.propagator_options["decouple_bilinear"]:
-                logger.debug(self, f"creating chol due to decomposition of bilinear term")
+                logger.debug(
+                    self, f"creating chol due to decomposition of bilinear term"
+                )
                 zalpha = backend.einsum("Xpq, pq->X", self.geb, self.trial.Gf[0])
 
                 # TODO: set Afac as input variables as long as
@@ -635,25 +656,34 @@ class QMCbase(object):
                 # Afac = (system.boson_freq * 0.5) ** 0.5 / Bfac
 
                 decouple_scheme = self.propagator_options["decouple_scheme"]
-                self.chol_bilinear = tools.bilinear_decomposition(Afac, Bfac, g_OR, decouple_scheme)
+                self.chol_bilinear = tools.bilinear_decomposition(
+                    Afac, Bfac, g_OR, decouple_scheme
+                )
 
-                self.chol_bilinear_e = self.chol_bilinear[0] # electronic part
+                self.chol_bilinear_e = self.chol_bilinear[0]  # electronic part
                 # add the electronic part of bilinear coupling into ltensor
                 if not self.propagator_options["turnoff_bosons"]:
-                    ltensor = backend.concatenate((ltensor, self.chol_bilinear_e), axis=0)
+                    ltensor = backend.concatenate(
+                        (ltensor, self.chol_bilinear_e), axis=0
+                    )
 
                 logger.debug(self, f"Debug: Decouple scheme = {decouple_scheme}")
-                logger.debug(self, f"Debug: Decomposing bilinear results in {len(self.chol_bilinear[0])} AFs")
+                logger.debug(
+                    self,
+                    f"Debug: Decomposing bilinear results in {len(self.chol_bilinear[0])} AFs",
+                )
 
             for i in range(ltensor.shape[0]):
                 evals, evecs = scipy.linalg.eigh(ltensor[i])
                 logger.debug(self, f"evals of ltensor[{i}] in OAO: {evals}")
 
-            logger.debug(self, f"Norm of ltensor (with chol_bilinear_e):  {backend.linalg.norm(ltensor)}")
+            logger.debug(
+                self,
+                f"Norm of ltensor (with chol_bilinear_e):  {backend.linalg.norm(ltensor)}",
+            )
 
         self.nfields = ltensor.shape[0]
         return h1e, ltensor
-
 
     def measure_observables(self, operator):
         r"""Placeholder for measure_observables.
@@ -663,7 +693,6 @@ class QMCbase(object):
         """
         observables = None
         return observables
-
 
     def walker_trial_overlap(self):
         r"""Deprecated function!!!!
@@ -695,11 +724,11 @@ class QMCbase(object):
 
     def orthogonalization(self):
         r"""
-        Renormalizaiton and orthogonaization of walkers
+        Renormalization and orthogonalization of walkers
 
         .. note::
 
-            Since the orthogonaization depends on the type of walkers, we are moving
+            Since the orthogonalization depends on the type of walkers, we are moving
             this function into walkers. Hence, the function here is to be deprecated!
         """
 
@@ -729,23 +758,47 @@ class QMCbase(object):
         self.walkers.ovlp = self.walkers.ovlp / self.walkers.detR
         """
 
-
         if self.walkers.boson_phiw is not None:
-            ortho_walkers = backend.zeros_like(self.walkers.boson_phiw)
-            norms = backend.einsum('ij,ij->i', self.walkers.boson_phiw, self.walkers.boson_phiw.conj())
-            norms = backend.maximum(backend.sqrt(norms), 1.e-12)
-            self.walkers.boson_phiw = self.walkers.boson_phiw / norms[:, None]
+            # 2026-02-19 jzw: This uses a lot of the same code as
+            # trial.TrialHF.boson_ovlp_with_walkers()
+            # Consider refactoring (into generic_walkers.py?)
+
+            # Indices - w: walkers; a: boson modes; m,n: boson Fock states
+            # boson_ovlp.shape = (nwalkers, )
+            norms = backend.einsum(
+                "wam, wam -> w", self.walkers.boson_phiw.conj(), self.walkers.boson_phiw
+            )
+            norms = 1.0 / backend.maximum(backend.sqrt(norms), 1.0e-12)
+            self.walkers.boson_phiw = backend.einsum(
+                "wam, w -> wam", self.walkers.boson_phiw, norms
+            )
+            # self.walkers.boson_phiw = self.walkers.boson_phiw / norms[:, None]
             self.walkers.boson_log_weight += backend.log(norms)
-            self.walkers.boson_ovlp = self.walkers.boson_phiw @ self.trial.boson_psi.conj()
-            self.walkers.boson_ovlp /= norms
+            self.walkers.boson_ovlp = backend.einsum(
+                "am, wam , w -> w",
+                self.trial.boson_psi.conj(),
+                self.walkers.boson_phiw,
+                norms,
+            )
             self.walkers.ovlp *= self.walkers.boson_ovlp
+
+            # ortho_walkers = backend.zeros_like(self.walkers.boson_phiw)
+            # norms = backend.einsum(
+            #    "ij,ij->i", self.walkers.boson_phiw, self.walkers.boson_phiw.conj()
+            # )
+
+            # self.walkers.boson_ovlp = (
+            #    backend.dot(self.walkers.boson_phiw, self.trial.boson_psi.conj())
+            #    # self.walkers.boson_phiw @ self.trial.boson_psi.conj()
+            # ) / norms
+            # self.walkers.boson_ovlp /= norms
 
             # for iw in range(self.walkers.boson_phiw.shape[0]):
             #    ortho_walkers[iw] = backend.linalg.qr(self.walkers.boson_phiw[iw])[0]
             # self.walkers.boson_phiw = ortho_walkers
 
     # renormalization is to be deprecated
-    orthonormalization = orthogonalization
+    # orthonormalization = orthogonalization
 
     def local_energy_spin(self, h1e, eri, G1p):
         r"""Compute local energy
@@ -843,7 +896,8 @@ class QMCbase(object):
         if step < 0:
             # Initial setup for the property buffer
             logger.debug(
-                self, f"Debug: initial buffer shape (in accumulator) is {self.property_buffer.shape}"
+                self,
+                f"Debug: initial buffer shape (in accumulator) is {self.property_buffer.shape}",
             )
             # TODO: compute the initial values of the properties
             return
@@ -857,9 +911,7 @@ class QMCbase(object):
         }
 
         # Accumulate values for the specified properties
-        tmp = [
-            _data_dict.get(key, 0.0 + 0.0j) for key in self.stacked_variables
-        ]
+        tmp = [_data_dict.get(key, 0.0 + 0.0j) for key in self.stacked_variables]
         self.property_buffer += backend.array(tmp)
 
         # logger.debug(self, f"Debug: updated buffer shape is {self.property_buffer.shape}")
@@ -870,7 +922,9 @@ class QMCbase(object):
             # Reduce the variables across nodes using MPI
             if walkers._mpi.size > 1:
                 # Create a buffer to hold the reduced data
-                reduced_buffer = walkers._mpi.comm.allreduce(self.property_buffer, op=MPI.SUM)
+                reduced_buffer = walkers._mpi.comm.allreduce(
+                    self.property_buffer, op=MPI.SUM
+                )
                 self.property_buffer = reduced_buffer
             # print("reduced property_buffer: ", self.property_buffer)
 
@@ -896,7 +950,6 @@ class QMCbase(object):
 
             # Reset the property buffer for the next accumulation cycle
             self.property_buffer.fill(0.0 + 0.0j)
-
 
     def kernel(self, propagator=None, trial_wf=None):
         r"""main function for QMC time-stepping
@@ -929,7 +982,7 @@ class QMCbase(object):
 
         h1e = self.h1e
         ltensor = self.ltensor
-        #propagator = self.propagator
+        # propagator = self.propagator
 
         trial = self.trial if trial_wf is None else trial_wf
         if propagator is None:
@@ -999,7 +1052,9 @@ class QMCbase(object):
 
             # step 2) weight control
             wall_t1 = time.time()
-            self.walkers.weight_control(step, freq=self.pop_control_freq, method=self.pop_control_method)
+            self.walkers.weight_control(
+                step, freq=self.pop_control_freq, method=self.pop_control_method
+            )
             self.wt_weight_control += time.time() - wall_t1
 
             # moved phaseless approximation to propagation
@@ -1015,7 +1070,9 @@ class QMCbase(object):
             # self.measurements(walkers, step)
             if (step + 1) % self.property_calc_freq == 0:
                 # Compute energies and other observables
-                energies = propagator.local_energy(h1e, ltensor, walkers, trial, enuc=self.nuc_energy)
+                energies = propagator.local_energy(
+                    h1e, ltensor, walkers, trial, enuc=self.nuc_energy
+                )
                 energy = energies[0] / energies[1]
 
                 # Append time and energy to respective lists
@@ -1077,13 +1134,14 @@ class QMCbase(object):
         logger.note(self, f"   Breakdown of twobody:")
         logger.note(self, f"     Random AF     : {self.propagator.wt_random: 9.3f}")
         logger.note(self, f"     Force bias    : {self.propagator.wt_fbias: 9.3f}")
-        logger.note(self, f"     scale bias    : {self.propagator.wt_fbias_rescale: 9.3f}")
+        logger.note(
+            self, f"     scale bias    : {self.propagator.wt_fbias_rescale: 9.3f}"
+        )
         logger.note(self, f"     HS of twobody : {self.propagator.wt_hs: 9.3f}")
         logger.note(self, f"       build HS       : {self.propagator.wt_chs: 9.3f}")
         logger.note(self, f"       Propagate HS   : {self.propagator.wt_phs: 9.3f}")
         # more wall times TBA.
         logger.note(self, f"")
-
 
     def post_kernel(self):
         r"""Prints relevant citation information for calculation."""

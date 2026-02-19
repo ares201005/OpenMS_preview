@@ -163,7 +163,8 @@ import time
 import warnings
 
 from openms.mqed.qedhf import RHF as QEDRHF
-from openms.lib.boson import Photon
+
+# from openms.lib.boson import Photon
 from openms.qmc import qmc
 
 
@@ -173,10 +174,8 @@ class AFQMC(qmc.QMCbase):
         self.exp_h1e = None
 
     def dump_flags(self):
-        r""" Dump flags
-        """
+        r"""Dump flags"""
         super().dump_flags()
-
 
     def build_propagator(self, h1e, eri, ltensor):
         r"""Deprecated function
@@ -209,7 +208,6 @@ class AFQMC(qmc.QMCbase):
         logger.debug(
             self, "norm of TL_tensor:   %15.8f", backend.linalg.norm(self.TL_tensor)
         )
-
 
     def propagate_walkers(self, walkers, xbar, ltensor):
         r"""Deprecated function!!!
@@ -371,7 +369,7 @@ if __name__ == "__main__":
     fcisolver = fci.FCI(mf)
     fci_energy = fcisolver.kernel()[0]
 
-    print('fci_energy is: ', fci_energy)
+    print("fci_energy is: ", fci_energy)
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()

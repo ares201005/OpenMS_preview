@@ -5,7 +5,8 @@ import numpy as backend
 import scipy
 
 from openms.lib.logger import task_title
-from openms.lib import NUMBA_AVAILABLE #, QMCLIB_AVAILABLE
+from openms.lib import deprecated, NUMBA_AVAILABLE  # , QMCLIB_AVAILABLE
+from openms.lib.boson import hamiltonian_fock, displacement_fock
 from openms.qmc import get_backend
 
 from openms.__mpi__ import MPI, original_print
@@ -14,6 +15,8 @@ from openms.qmc.bp import _BPBuffer
 
 
 # this function will be moved into lib/boson
+# 2026-02-19 jzw: lib/boson/displacement_fock() replaces
+@deprecated
 def boson_adag_plus_a(nmodes, boson_states, za):
     r"""
     Get matrix representation of :math:`\sum_\alpha z_\alpha(a^\dagger_\alpha + a_\alpha)`
@@ -58,13 +61,14 @@ def boson_adag_plus_a(nmodes, boson_states, za):
         # off-diaognal term
         a = backend.diag(backend.sqrt(backend.arange(1, mdim)), k=1)
         h_od = a + a.T
-        Hb[idx:idx+mdim, idx:idx+mdim] = h_od * za[imode]
+        Hb[idx : idx + mdim, idx : idx + mdim] = h_od * za[imode]
         idx += mdim
 
     return Hb
 
+
 def propagate_onebody(op, phi):
-    r""" Base function for propagating onebody operator
+    r"""Base function for propagating onebody operator
 
     op: (n, n) array
     phi: (nw, n, m) array
@@ -75,7 +79,7 @@ def propagate_onebody(op, phi):
     """
 
     # The loop is faster than the einsum
-    if False: # TODO: determine which method to contract the tensor
+    if False:  # TODO: determine which method to contract the tensor
         phi = backend.einsum("pq, zqr->zpr", op, phi)
     else:
         for iw in range(phi.shape[0]):
@@ -97,7 +101,7 @@ if NUMBA_AVAILABLE:
 
     @njit(parallel=True, fastmath=True)
     def propagate_onebody_numba(op, phi):
-        r""" Base function for propagating onebody operator
+        r"""Base function for propagating onebody operator
 
         op: (n, n) array
         phi: (nw, n, m) array
@@ -112,10 +116,9 @@ if NUMBA_AVAILABLE:
             phi[iw] = op @ phi[iw]
         return phi
 
-
     @njit(parallel=True, fastmath=True)
     def left_propagate_onebody_numba(op, phi):
-        r""" Base function for propagating onebody operator
+        r"""Base function for propagating onebody operator
 
         op: (n, n) array
         phi: (nw, n, m) array
@@ -129,7 +132,6 @@ if NUMBA_AVAILABLE:
         for iw in prange(nwalkers):
             phi[iw] = phi[iw] @ op
         return phi
-
 
     @njit(parallel=True, fastmath=True)
     def propagate_exp_op_numba(phiw, op, order):
@@ -168,7 +170,6 @@ if NUMBA_AVAILABLE:
         for z in prange(nw):
             result[z] = backend.dot(psi.astype(backend.complex128), Ghalf[z].T)
         return result
-
 
     @njit(parallel=True, fastmath=True)
     def tensor_dot_numba(xshift, ltensor, factor):
@@ -264,7 +265,9 @@ def build_HS(xshift, ltensor, factor):
 
     nchol, nao = ltensor.shape[:-1]
     nwalkers = xshift.shape[0]
-    eri_op = factor * backend.dot(xshift, ltensor.reshape(nchol, -1)).reshape(nwalkers, nao, nao)
+    eri_op = factor * backend.dot(xshift, ltensor.reshape(nchol, -1)).reshape(
+        nwalkers, nao, nao
+    )
     return eri_op
 
 
@@ -292,11 +295,13 @@ def propagate_exp_op(phiw, op, order):
 
     return phiw
 
+
 # TODO: set from configuration and availability
 # if QMCLIB_AVAILABLE:
 if get_backend() == "qmclib":
     print("Debug: using qmclib kernel")
     from openms.lib import _qmclib
+
     propagate_onebody_kernel = _qmclib.propagate_onebody_complex
     propagate_HS_kernel = _qmclib.propagate_exp_op_complex
 # elif NUMBA_AVAILABLE:
@@ -319,6 +324,39 @@ def left_apply_onebody(L, exp_h1e):
     # [exp{-H1 t}_\dagger]_{} L_{wqn}
     Lnew = propagate_onebody_kernel(exp_h1e.T, L.transpose(0, 2, 1))
     return Lnew.transpose(0, 2, 1)
+
+
+def boson_exp_op_walker_taylor(
+    taylor_order: int, walker_phi: backend.ndarray, op: backend.ndarray
+) -> backend.ndarray:
+    r"""Apply the bosonic operator :math:`\exp{A}` to the
+    walker wavefunctions :math:`\lvert \phi_w \rangle` approximately,
+    by recursively implementing Taylor expansion to order taylor_order.
+
+    Parameters
+    ----------
+    taylor_order : int
+        The order to truncate the Taylor expansion.
+    walker_phi : numpy.ndarray
+        The walker wavefunctions;
+        walker_phi.shape = (nwalkers, nmodes, dim_fock)
+    op : numpy.ndarray
+        The walker-specific operators to exponentiate;
+        op.shape = (nwalkers, nmodes, dim_fock, dim_fock)
+
+    Returns
+    -------
+    eAphi : numpy.ndarray
+        The approximation to :math:`e^A \lvert \phi_w \rangle`.
+        eAphi.shape = (nwalker, nmodes, dim_fock)
+    """
+    temp = walker_phi.copy()
+    for order_i in range(taylor_order):
+        temp = backend.einsum("wamn, wan -> wam", op, temp) / (order_i + 1.0)
+        walker_phi += temp
+        # temp = backend.einsum("zNM, zM->zN", op, temp) / (order_i + 1.0)
+
+    return walker_phi
 
 
 class PropagatorBase(object):
@@ -348,7 +386,7 @@ class PropagatorBase(object):
         self.TL_tensor = None
         self.exp_h1e = None
         self.nfields = None  # Number of auxiliary fields for fermions
-        self.nBfields = None # Number of auxiliary fields for bosons
+        self.nBfields = None  # Number of auxiliary fields for bosons
         self.mf_shift = None
 
         # variables for collecting wall times
@@ -378,8 +416,7 @@ class PropagatorBase(object):
         # for back propagation
         self.enable_bp = kwargs.get("enable_bp", False)
         self.L_bp = kwargs.get("bp_length", 10)
-        self._bpbuf = None # kwargs.get("BPbuff", None)
-
+        self._bpbuf = None  # kwargs.get("BPbuff", None)
 
     # @abstractmethod
     def build(self, h1e, ltensor, trial=None, geb=None):
@@ -429,7 +466,11 @@ class PropagatorBase(object):
 
         # shift due to eri
         if self.nbarefields > 0:
-            trace_eri = backend.einsum("npr,nrq->pq", ltensor[:self.nbarefields].conj(), ltensor[:self.nbarefields])
+            trace_eri = backend.einsum(
+                "npr,nrq->pq",
+                ltensor[: self.nbarefields].conj(),
+                ltensor[: self.nbarefields],
+            )
         else:
             trace_eri = backend.einsum("npr,nrq->pq", ltensor.conj(), ltensor)
         shifted_h1e = h1e - 0.5 * trace_eri
@@ -468,7 +509,6 @@ class PropagatorBase(object):
         if self.enable_bp:
             self.enable_back_propagation(self.L_bp)
 
-
     def dump_flags(self):
         r"""dump flags (TBA)"""
         logger.note(self, task_title("Flags of propagator"))
@@ -482,7 +522,6 @@ class PropagatorBase(object):
 
         # print(task_title(""))
 
-
     def enable_back_propagation(self, Lbp):
         """Call once before projection if use BP of length Lbp."""
         self.enable_bp = True
@@ -490,12 +529,10 @@ class PropagatorBase(object):
         self._bpbuf = _BPBuffer(L_bp=self.L_bp)
         # print(f"Debug-yz: BP is enabled with a length of {self.L_bp} steps")
 
-
     def disable_back_propagation(self):
         self.enable_bp = False
         self._bpbuf = None
         self.L_bp = 0
-
 
     @abstractmethod
     def propagate_walkers(self, trial, walkers, ltensor, eshift=0.0, verbose=0):
@@ -527,7 +564,6 @@ class Phaseless(PropagatorBase):
         super().__init__(*args, **kwargs)
         self.ebound = (2.0 / self.dt) ** 0.5
 
-
     def compute_local_energies(self, TL_theta, h1e, vbias, gf):
         r"""compute local energies
 
@@ -538,17 +574,14 @@ class Phaseless(PropagatorBase):
     # TODO: according to the headers of trail,walker, propagator, and options to
     # select right function of computing energy (may use dict)
 
-
     def local_energy(self, h1e, ltensor, walkers, trial, enuc=0.0):
         if self.L_bp > 0 and self._bpbuf is not None:
             return self._local_energy_bp(h1e, ltensor, walkers, trial, enuc)
         else:
             return self._local_energy(h1e, ltensor, walkers, trial, enuc)
 
-
     def _local_energy(self, h1e, ltensor, walkers, trial, enuc=0.0):
-        r"""Compute local energy with UHF
-        """
+        r"""Compute local energy with UHF"""
 
         t0 = time.time()
         # update green function fist
@@ -583,12 +616,10 @@ class Phaseless(PropagatorBase):
         # energy = energy / backend.sum(walkers.weights)
         return [etot, norm, e1, e2]
 
-
     def _local_energy_bp(self, h1e, ltensor, walkers, trial, enuc=0.0):
         from openms.qmc.bp import bp_energy
 
         return bp_energy(self, trial, walkers, ltensor, h1e, enuc)
-
 
     def rescale_fbias(self, fbias):
         r"""
@@ -615,7 +646,6 @@ class Phaseless(PropagatorBase):
         self.nfbound += backend.sum(idx_to_rescale)
         return fbias
 
-
     def propagate_walkers_onebody(self, walkers):
         r"""Propgate one-body term
 
@@ -626,14 +656,19 @@ class Phaseless(PropagatorBase):
         # logger.debug(self, f"Debug: phiwb.shape = {walkers.phiwb.shape}")
 
         walkers.phiwa = propagate_onebody_kernel(self.exp_h1e[0], walkers.phiwa)
-        logger.debug(self, f"Debug: norm of phiwa after onebody {backend.linalg.norm(walkers.phiwa):.8f}")
+        logger.debug(
+            self,
+            f"Debug: norm of phiwa after onebody {backend.linalg.norm(walkers.phiwa):.8f}",
+        )
 
         if walkers.ncomponents > 1:
             walkers.phiwb = propagate_onebody_kernel(self.exp_h1e[1], walkers.phiwb)
-            logger.debug(self, f"Debug: norm of phiwb after onebody {backend.linalg.norm(walkers.phiwb):.8f}")
+            logger.debug(
+                self,
+                f"Debug: norm of phiwb after onebody {backend.linalg.norm(walkers.phiwb):.8f}",
+            )
         self.wt_onebody += time.time() - t0
         logger.debug(self, f"Debug: time of propagate onebody: { time.time() - t0}")
-
 
     def propagate_HS(self, walkers, ltensor, xshift):
         r"""Propagate the walker WF according to the auxiliary field (HS)"""
@@ -645,9 +680,11 @@ class Phaseless(PropagatorBase):
 
         t0 = time.time()
         sqrtdt = 1j * backend.sqrt(self.dt)
-        if True: # using CPU
+        if True:  # using CPU
             nchol, nao = ltensor.shape[:-1]
-            eri_op = sqrtdt * backend.dot(xshift, ltensor.reshape(nchol, -1)).reshape(walkers.nwalkers, nao, nao)
+            eri_op = sqrtdt * backend.dot(xshift, ltensor.reshape(nchol, -1)).reshape(
+                walkers.nwalkers, nao, nao
+            )
         else:
             eri_op = sqrtdt * backend.einsum("zn, npq->zpq", xshift, ltensor)
         logger.debug(self, f"Debug: time of construct VHS: {time.time() - t0}")
@@ -658,9 +695,10 @@ class Phaseless(PropagatorBase):
         propagate_HS_kernel(walkers.phiwa, eri_op, self.taylor_order)
         if walkers.ncomponents > 1:
             propagate_HS_kernel(walkers.phiwb, eri_op, self.taylor_order)
-        logger.debug(self, f"Debug: time of propagating twobody exp operator {time.time() - t0}")
+        logger.debug(
+            self, f"Debug: time of propagating twobody exp operator {time.time() - t0}"
+        )
         self.wt_phs += time.time() - t0
-
 
     def propagate_walkers_twobody(self, trial, walkers, ltensor):
         # TODO: improve the efficiency
@@ -704,23 +742,36 @@ class Phaseless(PropagatorBase):
             # This part is to make sure MPI version has the same random number as the serial code
             # for debug debug MPI purpose
             if walkers._mpi.rank == 0:
-                xi_full = backend.random.normal(0.0, 1.0, (self.nfields + self.num_fake_fields) * walkers.global_nwalkers)
+                xi_full = backend.random.normal(
+                    0.0,
+                    1.0,
+                    (self.nfields + self.num_fake_fields) * walkers.global_nwalkers,
+                )
                 # print("random numbers = ", xi_full) # YZ: confimed to be same for mpi
             else:
                 xi_full = None
             xi_size = (self.nfields + self.num_fake_fields) * walkers.nwalkers
             xi = backend.empty(xi_size, dtype=backend.float64)
             # original_print("local xi size = ", xi_size)
-            counts = [(self.nfields + self.num_fake_fields) * nw for nw in walkers.walker_counter]
+            counts = [
+                (self.nfields + self.num_fake_fields) * nw
+                for nw in walkers.walker_counter
+            ]
             displs = [0] + list(backend.cumsum(counts))[:-1]
-            walkers._mpi.comm.Scatterv([xi_full, counts, displs, MPI.DOUBLE], xi, root=0)
+            walkers._mpi.comm.Scatterv(
+                [xi_full, counts, displs, MPI.DOUBLE], xi, root=0
+            )
         else:
             # In practice, we will generate random number locally, without scattering
-            xi = backend.random.normal(0.0, 1.0, (self.nfields + self.num_fake_fields) * walkers.nwalkers)
+            xi = backend.random.normal(
+                0.0, 1.0, (self.nfields + self.num_fake_fields) * walkers.nwalkers
+            )
 
-        xi = xi.reshape(walkers.nwalkers, self.nfields + self.num_fake_fields)[:, :self.nfields]
+        xi = xi.reshape(walkers.nwalkers, self.nfields + self.num_fake_fields)[
+            :, : self.nfields
+        ]
         if self.nfields > self.nbarefields:
-            self.xi_bilinear = xi[:, self.nbarefields:self.nfields]
+            self.xi_bilinear = xi[:, self.nbarefields : self.nfields]
 
         t1 = time.time()
         self.wt_random += t1 - t0
@@ -731,7 +782,7 @@ class Phaseless(PropagatorBase):
         # F = \sqrt{-\Delta\tau} <L'> = \sqrt{-\Delta\tau} (<L> - <L>_{MF})  (where L' is the shifted chols)
         #   = j\sqrt{\Delta\tau}(<L> - <L>_{MF})
         # xbar is the F
-        self.vbias = trial.get_vbias(walkers, ltensor) # (nwalkers, nfield)
+        self.vbias = trial.get_vbias(walkers, ltensor)  # (nwalkers, nfield)
         self.wt_fbias += time.time() - t1
         t1 = time.time()
 
@@ -741,7 +792,9 @@ class Phaseless(PropagatorBase):
 
         logger.debug(self, f"Debug: mf_shift.shape = {self.mf_shift.shape}")
         logger.debug(self, f"Debug: vbias.shape = {self.vbias.shape}")
-        logger.debug(self, f"Debug: norm of vbias = {backend.linalg.norm(self.vbias):.8f}")
+        logger.debug(
+            self, f"Debug: norm of vbias = {backend.linalg.norm(self.vbias):.8f}"
+        )
 
         # push AF into stack if enable_bp
         if self.L_bp > 0 and self._bpbuf is not None:
@@ -805,12 +858,12 @@ class Phaseless(PropagatorBase):
         # a) compute overlap and update the Green's funciton
         t0 = time.time()
         ovlp = trial.ovlp_with_walkers_gf(walkers)
-        #logger.debug(self, f"Debug: trial_walker overlap is {ovlp}")
-        #logger.debug(
+        # logger.debug(self, f"Debug: trial_walker overlap is {ovlp}")
+        # logger.debug(
         #    self,
         #    f"Debug: norm of walker.Ghalfa is {backend.linalg.norm(walkers.Ghalfa)}",
-        #)
-        #if walkers.ncomponents > 1:
+        # )
+        # if walkers.ncomponents > 1:
         #    logger.debug(
         #        self,
         #        f"Debug: norm of walker.Ghalfb is {backend.linalg.norm(walkers.Ghalfb)}",
@@ -842,9 +895,10 @@ class Phaseless(PropagatorBase):
         self.wt_weight += time.time() - t0
         # print(f"Max/min/sum(weights): {backend.max(walkers.weights):.3f} {backend.min(walkers.weights):.3f} {backend.sum(walkers.weights):.3f} ")
 
-        assert not backend.isnan(backend.linalg.norm(walkers.weights)), "NaN detected in walkers.weights"
+        assert not backend.isnan(
+            backend.linalg.norm(walkers.weights)
+        ), "NaN detected in walkers.weights"
         # logger.debug(self, f"updated weight: {walkers.weights}\n eshift = {eshift}")
-
 
     def update_weight(self, walkers, ovlp, newovlp, cfb, cmf, eshift=0.0):
         r"""
@@ -873,7 +927,9 @@ class Phaseless(PropagatorBase):
 
         # TODO: 1) adapt it fully to the propagator class?
 
-        ovlp_ratio = (newovlp / ovlp) # ** 2 (this factor only applies to RHF case, has been absorbed in the overlap calculation)
+        ovlp_ratio = (
+            newovlp / ovlp
+        )  # ** 2 (this factor only applies to RHF case, has been absorbed in the overlap calculation)
         # logger.debug(self, f"Debug: ovlp_ratio is {ovlp_ratio}")
 
         # the hybrid energy scheme
@@ -913,13 +969,12 @@ class Phaseless(PropagatorBase):
         walkers.weights *= importance_func
         walkers.ovlp = newovlp
 
+
 class FTSweep(Phaseless):
     r"""Finite temperature sweep and propagators (not done yet)"""
 
     def __init__(self, dt, **kwargs):
         super().__init__(dt, **kwargs)
-
-
 
 
 class PhaselessBoson(Phaseless):
@@ -929,7 +984,6 @@ class PhaselessBoson(Phaseless):
         super().__init__(dt, **kwargs)
         self.e_boson_shift = 0.0
 
-
     def propagate_walkers(self, *args, **kwargs):
         r"""
         TBA
@@ -937,7 +991,6 @@ class PhaselessBoson(Phaseless):
         raise NotImplementedError(
             "propagate_wakers in PhaselessBoson class is not implemented yet."
         )
-
 
     def build(self, h1b, chol_b, trial):
         r"""Build the propagator and intermediate variables
@@ -989,12 +1042,10 @@ class PhaselessBoson(Phaseless):
         self.exp_h1b = scipy.linalg.expm(-self.dt / 2 * shifted_h1b)
         self.h1b = h1b
 
-
     def propagate_walkers_onebody(self, walkers):
         r"""Propagate one-body term"""
 
         walkers.phiw = backend.einsum("pq, zqr->zpr", self.exp_h1e, walkers.phiw)
-
 
     def propagate_walkers_twobody(self, phiw):
         r"""Propagate Bosonic two-body term"""
@@ -1175,13 +1226,11 @@ class PhaselessElecBoson(Phaseless):
         self.e_local_boson = 0.0
         self.nbarefields = kwargs.get("nbarefields", 0)
 
-
     def dump_flags(self):
         super().dump_flags()
         logger.note(self, f" Decouple bilinear term : {self.decouple_bilinear}")
         logger.note(self, f" Quantization of boson  : {self.boson_quantization}")
         logger.note(self, task_title("") + "\n")
-
 
     def build(self, h1e, ltensor, trial, geb=None):
         r"""Build the propagator and intermediate variables
@@ -1225,13 +1274,14 @@ class PhaselessElecBoson(Phaseless):
 
         self.geb = geb
 
-        nmodes = self.system.nmodes
-        basis = backend.asarray(
-            [backend.arange(mdim) for mdim in self.system.nboson_states]
-        )
-        waTa = backend.einsum("m, mF->mF", self.system.boson_freq, basis).ravel()
-        self.Hb = backend.diag(waTa)
+        self.Hb = hamiltonian_fock(self.system.dim_fock, self.system.boson_freq)
         # logger.debug(self, f"Debug: Hb = {self.Hb}")
+        # nmodes = self.system.nmodes
+        # basis = backend.asarray(
+        #    [backend.arange(mdim) for mdim in self.system.nboson_states]
+        # )
+        # waTa = backend.einsum("m, mF->mF", self.system.boson_freq, basis).ravel()
+        # self.Hb = backend.diag(waTa)
 
         # if we decouple the bilinear term
         if self.decouple_bilinear:
@@ -1241,35 +1291,53 @@ class PhaselessElecBoson(Phaseless):
 
             logger.debug(self, f"\nDebug: build shifted bosonic operators!")
             rho_mf = trial.psi.dot(trial.psi.T.conj())
-            if trial.boson_psi.ndim == 1:
-                boson_rhomf = backend.outer(trial.boson_psi, trial.boson_psi.T.conj())
-            else:
-                boson_rhomf = trial.boson_psi.dot(trial.boson_psi.T.conj())
+            boson_rhomf = backend.einsum(
+                "ai, aj -> aij", trial.boson_psi, trial.boson_psi.conj()
+            )
+            # if trial.boson_psi.ndim == 1:
+            #    boson_rhomf = backend.outer(trial.boson_psi, trial.boson_psi.T.conj())
+            # else:
+            #    boson_rhomf = trial.boson_psi.dot(trial.boson_psi.T.conj())
 
             # logger.debug(self, f"boson_psi.shape = {trial.boson_psi.shape}")
             # logger.debug(self, f"boson_rhomf.shape = {boson_rhomf.shape}")
 
-            self.chol_bilinear_b = self.chol_bilinear[1] # bosonic part
+            self.chol_bilinear_b = self.chol_bilinear[1]  # bosonic part
+            nfock = self.system.dim_fock
 
             # 2) construct bosonic MF shift
-            nfock = self.system.nboson_states[0]
+            nmodes = self.system.nmodes
+            dim_fock = self.system.nboson_states[0]
+            Hq = displacement_fock(nmodes, dim_fock)
+
+            # einsum indices - c: Cholesky tensors; a: modes; n, m: Fock states
+            self.chol_B = backend.einsum("c, amn-> camn", self.chol_bilinear_b, Hq)
+            self.nBfields = self.chol_B.shape[0]  # c
             # matrix representation of (a^\dag + a) in Fcok space
-            Hq = boson_adag_plus_a(1, [nfock], [1.0])
-            self.chol_B = backend.einsum("X, nm-> Xnm", self.chol_bilinear_b, Hq)
-            self.nBfields = self.chol_B.shape[0]
+            # Hq = boson_adag_plus_a(1, [nfock], [1.0])
+            # self.chol_B = backend.einsum("X, nm-> Xnm", self.chol_bilinear_b, Hq)
+            # self.nBfields = self.chol_B.shape[0]
             if not self.turnoff_bosons:
                 assert self.nBfields == (self.nfields - self.nbarefields)
-                self.boson_mfshift = 1j * backend.einsum("npq, pq->n", self.chol_B, boson_rhomf)
-                self.shifted_Hb = self.Hb - backend.einsum("n, npq->pq", self.boson_mfshift, 1j * self.chol_B)
+                self.boson_mfshift = 1j * backend.einsum(
+                    "camn, amn -> c", self.chol_B, boson_rhomf
+                )
+                self.shifted_Hb = self.Hb - backend.einsum(
+                    "c, camn -> amn", self.boson_mfshift, 1j * self.chol_B
+                )
                 logger.debug(self, f" boson_mfshift =\n {self.boson_mfshift}")
             else:
                 self.shifted_Hb = self.Hb.copy()
 
-            logger.debug(self, f" Debug: norm of         Hb: {backend.linalg.norm(self.Hb)}")
-            logger.debug(self, f" Debug: norm of shifted Hb: {backend.linalg.norm(self.shifted_Hb)}")
+            logger.debug(
+                self, f" Debug: norm of         Hb: {backend.linalg.norm(self.Hb)}"
+            )
+            logger.debug(
+                self,
+                f" Debug: norm of shifted Hb: {backend.linalg.norm(self.shifted_Hb)}",
+            )
             logger.debug(self, f" Debug: chol_B =\n {self.chol_B}")
             logger.debug(self, f" Debug: boson_rhomf =\n {boson_rhomf}")
-
 
     def local_energy(self, h1e, ltensor, walkers, trial, enuc=0.0):
         r"""Overwrite the super().local_energy with bosonic and electron-boson
@@ -1280,19 +1348,43 @@ class PhaselessElecBoson(Phaseless):
         # and only to add the computation of bosonic and electron-boson interacting
         # local energies here
 
-        etot, norm, e1, e2 = super().local_energy(h1e, ltensor[:self.nbarefields], walkers, trial, enuc=enuc)
+        etot, norm, e1, e2 = super().local_energy(
+            h1e, ltensor[: self.nbarefields], walkers, trial, enuc=enuc
+        )
 
         # boson energy
         # walkers.boson_Gf = backend.einsum("wi, wj->wij", walkers.boson_phiw, walkers.boson_phiw.conj())
-        eb = local_eng_boson(self.system.boson_freq, self.system.nboson_states, walkers.boson_Gf)
+        eb = local_eng_boson(
+            self.system.boson_freq, self.system.dim_fock, walkers.boson_Gf
+        )
+        # eb = local_eng_boson(
+        #    self.system.boson_freq, self.system.nboson_states, walkers.boson_Gf
+        # )
         # print(f"Debug: Gfavg = {backend.sum(walkers.boson_Gf, axis=0) / walkers.nwalkers}")
         # print(f"Debug: Gf[0] = {walkers.boson_Gf[0]}")
 
         self.update_GF(trial, walkers)
 
         # electron-boson interacting energy
-        Gfermions = [walkers.Ga, walkers.Gb] if walkers.ncomponents > 1 else [walkers.Ga, walkers.Ga]
-        eg = local_eng_eboson(self.system.boson_freq, self.system.nboson_states, self.geb, Gfermions, walkers.boson_Gf)
+        Gfermions = (
+            [walkers.Ga, walkers.Gb]
+            if walkers.ncomponents > 1
+            else [walkers.Ga, walkers.Ga]
+        )
+        eg = local_eng_eboson(
+            self.system.boson_freq,
+            self.system.dim_fock,
+            self.geb,
+            Gfermions,
+            walkers.boson_Gf,
+        )
+        # eg = local_eng_eboson(
+        #    self.system.boson_freq,
+        #    self.system.nboson_states,
+        #    self.geb,
+        #    Gfermions,
+        #    walkers.boson_Gf,
+        # )
 
         # update the local energy with eb and eg
         if not self.turnoff_bosons:
@@ -1313,9 +1405,8 @@ class PhaselessElecBoson(Phaseless):
         # energy = energy / backend.sum(walkers.weights)
         return [etot, norm, e1, e2, eb, eg]
 
-
     # deprecated function
-    #def compute_local_energies(self, TL_theta, h1e, vbias, Gfs):
+    # def compute_local_energies(self, TL_theta, h1e, vbias, Gfs):
     #    r"""compute local energies"""
 
     #    Gf, Gb = Gfs
@@ -1342,8 +1433,7 @@ class PhaselessElecBoson(Phaseless):
     #    # print("photon energy, bilinear term are ", eb, ep)
     #    return eng_e + eb + ep
 
-
-
+    @deprecated
     def propagate_walkers_twobody_1st(self, walkers, trial):
         r"""Propagate by potential term using discrete HS transform."""
         # Construct random auxilliary field.
@@ -1395,7 +1485,6 @@ class PhaselessElecBoson(Phaseless):
                 walker.update_inverse_overlap(trial, vtup, vtdown, i)
             else:
                 walker.weight = 0
-
 
     def propagate_walkers_onebody(self, walkers):  # walker, system, trial, dt):
         r"""Propgate one-body term:
@@ -1455,9 +1544,8 @@ class PhaselessElecBoson(Phaseless):
 
         if not self.decouple_bilinear and self.geb is not None:
             # trace over bosonic DOF
-            # zlambda = backend.einsum("pq, Xpq ->X", walkers.rho, self.geb)
-            oei = backend.einsum("X, Xpq->pq", walkers.Qalpha, self.geb)
-
+            # Indices - a: boson modes, p, q: electron orbitals
+            oei = backend.einsum("a, apq -> pq", walkers.Qalpha, self.geb)
 
         # 2) oei_qed in 1st quantization (TBA)
 
@@ -1510,7 +1598,7 @@ class PhaselessElecBoson(Phaseless):
         # use super() method
         super().propagate_walkers_onebody(walkers)
 
-
+    @deprecated
     def propagate_walkers_bilinear(self, trial, walkers, dt):
         r"""Propagate the bilinear part
 
@@ -1531,12 +1619,17 @@ class PhaselessElecBoson(Phaseless):
         # g^\alpha_{pq} -> g_{pq, mn} |ket{qi, n} -> \ket{pi, m}
 
         nmodes = self.system.nmodes
-        boson_size = sum(self.system.nboson_states)
+        dim_fock = self.system.dim_fock
+        # boson_size = sum(self.system.nboson_states)
 
         if self.decouple_bilinear:
-            logger.debug(self, f"Debug: propagating the bilinear term in decoupled formalism")
+            logger.debug(
+                self, f"Debug: propagating the bilinear term in decoupled formalism"
+            )
         else:
-            logger.debug(self, f"Debug: propagating the bilinear term in product formalism")
+            logger.debug(
+                self, f"Debug: propagating the bilinear term in product formalism"
+            )
             #
 
         # FIXME; include zlambda or not
@@ -1552,7 +1645,7 @@ class PhaselessElecBoson(Phaseless):
         Qalpha = walkers.Qalpha
         oei = -dt * backend.einsum("X, Xpq->pq", Qalpha, self.geb)
         evol_Hep = -dt * Hb
-        #TODO: matrix element of <m|e^{-z_\alpha(a^\dag_\alpha + a_\alpha)}|n> can be analytically evaluated
+        # TODO: matrix element of <m|e^{-z_\alpha(a^\dag_\alpha + a_\alpha)}|n> can be analytically evaluated
 
         # propagate the WF
         temp = walkers.phiwa.copy()
@@ -1576,7 +1669,7 @@ class PhaselessElecBoson(Phaseless):
             walkers.phiwb = propagate_exp_op(walkers.phiwb, oei, self.taylor_order)
         """
 
-
+    @deprecated
     def propagate_decoupled_bilinear(self, trial, walkers):
         r"""Propagate the bilinear term in decoupled formalism
 
@@ -1592,7 +1685,6 @@ class PhaselessElecBoson(Phaseless):
 
         pass
 
-
     def propagate_bosons(self, trial, walkers, dt):
         r"""
         boson importance sampling
@@ -1601,7 +1693,6 @@ class PhaselessElecBoson(Phaseless):
             self.propagate_bosons_1st(trial, walkers, dt)
         else:
             self.propagate_bosons_2nd(trial, walkers, dt)
-
 
     def propagate_bosons_2nd(self, trial, walkers, dt):
         r"""Boson importance sampling in 2nd quantization
@@ -1631,12 +1722,19 @@ class PhaselessElecBoson(Phaseless):
             evol_Hb = scipy.linalg.expm(-dt * self.shifted_Hb)
         else:
             evol_Hb = scipy.linalg.expm(-dt * self.Hb)
-        walkers.boson_phiw = backend.einsum("mn, zn->zm", evol_Hb, walkers.boson_phiw)
+        walkers.boson_phiw = backend.einsum(
+            "amn, wan -> wam", evol_Hb, walkers.boson_phiw
+        )
+        # Indices - a: boson modes; w: walkers; m, n: Fock states for each mode
+        # walkers.boson_phiw = backend.einsum("mn, zn->zm", evol_Hb, walkers.boson_phiw)
 
         # eloc = local_eng_boson(self.system.boson_freq, self.system.nboson_states, walkers.boson_Gf)
         # walkers.weights *= backend.exp(-dt * eloc.real)
-        logger.debug(self, f"Debug: bosonic WF after free boson:  {abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}")
-
+        logger.debug(
+            self,
+            f"Debug: bosonic WF after free boson: shape = {walkers.boson_phiw.shape},\n "
+            + f"{abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}",
+        )
 
     def propagate_bosons_1st(self, trial, walkers, dt):
         r"""Boson importance sampling in 1st quantization formalism
@@ -1724,7 +1822,6 @@ class PhaselessElecBoson(Phaseless):
             -0.5 * self.dt * (eloc + elocold - 2 * self.eshift_boson)
         )
 
-
     def propagate_bosons_bilinear(self, trial, walkers, dt):
         r"""propagate the bilinear fermion-bosonic interaction term
         within two schemes:
@@ -1762,13 +1859,16 @@ class PhaselessElecBoson(Phaseless):
 
         # note geb already has sqrt(w/2)
         nmodes = self.system.nmodes
-        boson_size = sum(self.system.nboson_states)
-        Hb = backend.zeros((boson_size, boson_size), dtype=backend.complex128)
+        dim_fock = self.system.dim_fock
+        # boson_size = sum(self.system.nboson_states)
+        # Hb = backend.zeros((boson_size, boson_size), dtype=backend.complex128)
 
         # compute local bosonic energy
-        elocold = self.e_local_boson
+        # elocold = self.e_local_boson
         if self.decouple_bilinear:
-            logger.debug(self, f"Debug: propagating the bilinear term in decoupled formalism")
+            logger.debug(
+                self, f"Debug: propagating the bilinear term in decoupled formalism"
+            )
 
             # \sqrt{A) * X = sqrt(w/2) (b^\dagger + b)
 
@@ -1780,52 +1880,88 @@ class PhaselessElecBoson(Phaseless):
             # Note the electronic part out of the decomposed bilinear has
             # been concatenated into ltensor
 
-            # compute bosonic force bias
+            # boson_vbias.shape = (nwalker, nchol)
             boson_vbias = trial.get_boson_vbias(walkers, self.chol_B)
+
+            # TODO 2026-02-19: Check that the shapes work out properly here
             xbar = -backend.sqrt(dt) * (1j * boson_vbias - self.boson_mfshift)
             xbar = self.rescale_fbias(xbar)  # bound of vbias
-            xshift = xi - xbar  # [nwalker, nchol]
+            xshift = xi - xbar  # xshift.shape = (nwalker, nchol)
 
-            #print(f"boson_vbias   = {1j*boson_vbias}")
-            #print(f"boson_mfshift = {self.boson_mfshift}")
-            #print(f"xbar          = {xbar}")
+            # print(f"boson_vbias   = {1j*boson_vbias}")
+            # print(f"boson_mfshift = {self.boson_mfshift}")
+            # print(f"xbar          = {xbar}")
 
-            op_power = tau * backend.einsum("zn, nNM->zNM", xshift, self.chol_B)
-            #op_power = tau * backend.einsum("zn, nNM->zNM", xi, self.chol_B)
+            op_power = tau * backend.einsum("wc, camn -> wamn", xshift, self.chol_B)
+            # op_power = tau * backend.einsum("zn, nNM->zNM", xshift, self.chol_B)
+            # op_power = tau * backend.einsum("zn, nNM->zNM", xi, self.chol_B)
 
-            temp = walkers.boson_phiw.copy()
-            for order_i in range(self.taylor_order):
-                temp = backend.einsum("zNM, zM->zN", op_power, temp) / (order_i + 1.0)
-                walkers.boson_phiw += temp
+            walkers.boson_phiw = boson_exp_op_walker_taylor(
+                self.taylor_order, walkers.boson_phiw, op_power
+            )
+            # temp = walkers.boson_phiw.copy()
+            # for order_i in range(self.taylor_order):
+            #    temp = backend.einsum("zNM, zM->zN", op_power, temp) / (order_i + 1.0)
+            #    walkers.boson_phiw += temp
 
             # compute the cfb, cmf for weights updates
-            cfb = backend.einsum("zn, zn->z", xi, xbar) - 0.5 * backend.einsum("zn, zn->z", xbar, xbar)
+            cfb = backend.einsum("wc, wc -> w", xi, xbar) - 0.5 * backend.einsum(
+                "wc, wc -> w", xbar, xbar
+            )
             # factors due to MF shift and force bias
-            cmf = -backend.sqrt(dt) * backend.einsum("zn, n->z", xshift, self.boson_mfshift)
+            cmf = -backend.sqrt(dt) * backend.einsum(
+                "wc, c -> w", xshift, self.boson_mfshift
+            )
         else:
             # Trace over fermionic DOF to construct the photonic (bilinear part) Hamiltonian
-            logger.debug(self, f"Debug: propagating the bilinear term in product formalism")
+            logger.debug(
+                self, f"Debug: propagating the bilinear term in product formalism"
+            )
             # may move this part into the propagate_boson
-            zlambda = backend.einsum("pq, Xpq ->X", walkers.rho, self.geb)
-            Hb = boson_adag_plus_a(nmodes, self.system.nboson_states, zlambda)
+            zlambda = backend.einsum("pq, apq -> a", walkers.rho, self.geb)
+            X = displacement_fock(nmodes, dim_fock)
+            Hb = backend.einsum("a, amn -> amn", zlambda, X)
+            # Hb = boson_adag_plus_a(nmodes, self.system.nboson_states, zlambda)
 
-            #TODO: matrix element of <m|e^{-z_\alpha(a^\dag_\alpha + a_\alpha)}|n> can be analytically evaluated
+            # TODO: matrix element of <m|e^{-z_\alpha(a^\dag_\alpha + a_\alpha)}|n> can be analytically evaluated
             # exp(-\sqrt{w/2} g c^\dag_i c_j (b^\dag + b)) | n>
             evol_Hep = scipy.linalg.expm(-dt * Hb)
-            walkers.boson_phiw = backend.einsum("NM, zM->zN", evol_Hep, walkers.boson_phiw)
+            walkers.boson_phiw = backend.einsum(
+                "amn, wan -> wam", evol_Hep, walkers.boson_phiw
+            )
 
         # compute bosonic energy
-        logger.debug(self, f"Debug: bosonic WF after bilinear: {abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}")
+        logger.debug(
+            self,
+            f"Debug: bosonic WF after bilinear: {abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}",
+        )
 
         ## update bilinear part of local energy
-        Gfermions = [walkers.Ga, walkers.Gb] if walkers.ncomponents > 1 else [walkers.Ga, walkers.Ga]
-        eloc = local_eng_eboson(self.system.boson_freq, self.system.nboson_states, self.geb, Gfermions, walkers.boson_Gf)
+        Gfermions = (
+            [walkers.Ga, walkers.Gb]
+            if walkers.ncomponents > 1
+            else [walkers.Ga, walkers.Ga]
+        )
+        eloc = local_eng_eboson(
+            self.system.boson_freq,
+            self.system.dim_fock,
+            self.geb,
+            Gfermions,
+            walkers.boson_Gf,
+        )
+        # eloc = local_eng_eboson(
+        #    self.system.boson_freq,
+        #    self.system.nboson_states,
+        #    self.geb,
+        #    Gfermions,
+        #    walkers.boson_Gf,
+        # )
         self.e_local_boson = eloc
 
         ##merged into the update_weight()
-        #walkers.weights *= backend.exp(
+        # walkers.weights *= backend.exp(
         #   -dt * (eloc.real + elocold.real - 2.0 * self.e_boson_shift) / 2.0
-        #)
+        # )
         # logger.debug(self, f"Debug: old bilinear local energy {backend.dot(elocold, walkers.weights)}")
         # logger.debug(self, f"Debug: new bilinear local energy {backend.dot(eloc, walkers.weights)}")
 
@@ -1833,7 +1969,6 @@ class PhaselessElecBoson(Phaseless):
             return cfb, cmf
         else:
             return backend.zeros(walkers.nwalkers), backend.zeros(walkers.nwalkers)
-
 
     def update_GF(self, trial, walkers):
         r"""update GF (TODO: move to trial)"""
@@ -1849,25 +1984,24 @@ class PhaselessElecBoson(Phaseless):
         # logger.debug(self, f"walkers.Gf.shape = {walkers.Gf.shape}")
 
         if not self.decouple_bilinear:
-            walkers.rho = (
-                backend.einsum("z, zpq->pq", walkers.weights, walkers.Gf)
-                / backend.sum(walkers.weights)
-            )
+            walkers.rho = backend.einsum(
+                "z, zpq->pq", walkers.weights, walkers.Gf
+            ) / backend.sum(walkers.weights)
         # logger.debug(self, f"test DM = {backend.trace(walkers.rho)}")
 
         # get Qalpha in either 1st or 2nd quantization
-        walkers.Qalpha = walkers.get_boson_bdag_plus_b(trial, walkers.boson_phiw)
+        # walkers.Qalpha = walkers.get_boson_bdag_plus_b(trial, walkers.boson_phiw)
+        walkers.Qalpha = walkers.walker_displacement_mode(walkers.boson_phiw)
         logger.debug(self, f"Debug: Updated Q value is {walkers.Qalpha}")
-
 
     def propagate_walkers(self, trial, walkers, ltensor, eshift=0.0, verbose=0):
         r"""Propagate the walkers function for the coupled electron-boson interactions"""
 
         # 1) compute overlap and update the Green's funciton
         t0 = time.time()
-        ovlp = trial.ovlp_with_walkers_gf(walkers) # fermionic
+        ovlp = trial.ovlp_with_walkers_gf(walkers)  # fermionic
         if not self.turnoff_bosons:
-            boson_ovlp = trial.boson_ovlp_with_walkers(walkers) # bosonic
+            boson_ovlp = trial.boson_ovlp_with_walkers(walkers)  # bosonic
             ovlp *= boson_ovlp
 
         if not self.decouple_bilinear:
@@ -1879,7 +2013,11 @@ class PhaselessElecBoson(Phaseless):
         #
         # 3) boson propagator (including free and bilinear terms)
         #
-        logger.debug(self, f"Debug: bosonic WF before one propagation: {abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}")
+        logger.debug(
+            self,
+            f"Debug: bosonic WF before one propagation: shape = {walkers.boson_phiw.shape},\n "
+            + f"{abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}",
+        )
 
         if not self.turnoff_bosons:
             t0 = time.time()
@@ -1920,7 +2058,13 @@ class PhaselessElecBoson(Phaseless):
             t0 = time.time()
             self.propagate_bosons(trial, walkers, 0.5 * self.dt)
             self.wt_boson += time.time() - t0
-        #print(f"Debug: bosonic WF: {abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}")
+
+            logger.debug(
+                self,
+                f"Debug: bosonic WF after bilinear: shape = {walkers.boson_phiw.shape},\n "
+                + f"{abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}",
+            )
+        # print(f"Debug: bosonic WF: {abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}")
 
         #
         # 8) update weights
@@ -1928,9 +2072,13 @@ class PhaselessElecBoson(Phaseless):
         t0 = time.time()
         newovlp = trial.ovlp_with_walkers(walkers)
         if not self.turnoff_bosons:
-            new_boson_ovlp = trial.boson_ovlp_with_walkers(walkers) # bosonic
-            logger.debug(self, f"Debug: norm of new overlap is {backend.linalg.norm(newovlp)}")
-            logger.debug(self, f"Debug: bosonic overlap is {backend.linalg.norm(new_boson_ovlp)}")
+            new_boson_ovlp = trial.boson_ovlp_with_walkers(walkers)  # bosonic
+            logger.debug(
+                self, f"Debug: norm of new overlap is {backend.linalg.norm(newovlp)}"
+            )
+            logger.debug(
+                self, f"Debug: bosonic overlap is {backend.linalg.norm(new_boson_ovlp)}"
+            )
             # logger.debug(self, f"Debug: bosonic overlap is {new_boson_ovlp}")
             newovlp *= new_boson_ovlp
 
@@ -1941,8 +2089,14 @@ class PhaselessElecBoson(Phaseless):
         t0 = time.time()
         self.update_weight(walkers, ovlp, newovlp, cfb, cmf, eshift)
         self.wt_weight += time.time() - t0
-        logger.debug(self, f"Debug: updated weight: {backend.linalg.norm(walkers.weights)}\n eshift = {eshift}")
+        logger.debug(
+            self,
+            f"Debug: updated weight: {backend.linalg.norm(walkers.weights)}\n eshift = {eshift}",
+        )
 
-        assert not backend.isnan(backend.linalg.norm(walkers.weights)), "NaN detected in walkers.weights"
+        assert not backend.isnan(
+            backend.linalg.norm(walkers.weights)
+        ), "NaN detected in walkers.weights"
+
 
 # TODO: finite temperature QMC propagators:

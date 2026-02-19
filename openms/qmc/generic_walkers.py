@@ -32,6 +32,8 @@ import sys, time
 from abc import abstractmethod
 import numpy as backend
 from openms.lib import logger
+from openms.lib import deprecated
+from openms.lib.boson import displacement_fock
 from openms.lib.logger import task_title
 from openms.__mpi__ import MPI, original_print
 
@@ -41,6 +43,7 @@ default_walker_options = {
     "weight_min": 0.1,
     "weight_max": 10.0,
 }
+
 
 def initialize_walkers(trial):
     r"""get initial walkers
@@ -69,8 +72,8 @@ class BaseWalkers(object):
             Number of walkers
         """
 
-        #trial = kwargs.get("trial", None)
-        #if trial is None:
+        # trial = kwargs.get("trial", None)
+        # if trial is None:
         #    raise Exception("Trial WF must be specified in walker")
         self.verbose = trial.verbose
         self.stdout = trial.stdout
@@ -82,11 +85,14 @@ class BaseWalkers(object):
 
         # If MPI is used we will use global_xx for the globally (reduced/gathered) variables
         from openms.__mpi__ import MPI, CommType, MPIWrapper, original_print
+
         self._mpi = MPIWrapper()
         size = self._mpi.size
         #
         self.global_nwalkers = nwalkers
-        self.walker_counter = [nwalkers // size + (1 if i < nwalkers % size else 0) for i in range(size)]
+        self.walker_counter = [
+            nwalkers // size + (1 if i < nwalkers % size else 0) for i in range(size)
+        ]
         self.displs = [sum(self.walker_counter[:i]) for i in range(size)]
         nwalkers = self.walker_counter[self._mpi.rank]
         original_print(f"local nwalker of rank {self._mpi.rank} is {nwalkers}")
@@ -126,7 +132,6 @@ class BaseWalkers(object):
         self.spin_restricted = False
         # print("nwalkers in walkerfunciton is", self.nwalkers)
 
-
     def dump_flags(self):
         r"""
         dump flags
@@ -137,7 +142,6 @@ class BaseWalkers(object):
             logger.note(self, f" No. of walkers (per rank): {self.walker_counter}")
         else:
             logger.note(self, f" Number of walkers        : {self.nwalkers:5d}")
-
 
     @property
     def raw_norm(self):
@@ -152,7 +156,6 @@ class BaseWalkers(object):
             "The 'orthogonalization' method must be implemented in a subclass "
             "to handle renormalization and orthogonalization of walkers."
         )
-
 
     def weight_control(self, step, freq=5, method="reconfiguration"):
         r"""Handles the control of walker weights
@@ -191,38 +194,57 @@ class BaseWalkers(object):
 
         population_control_factory(self, method=method)
 
-
     def _pack_walkers(self):
         r"""pack walkers into list for population control"""
         if self.boson_phiw is not None and self.ncomponents > 1:
-            packed_walkers = [[self.phiwa[i], self.phiwb[i], self.boson_phiw[i]] for i in range(self.nwalkers)]
+            packed_walkers = [
+                [self.phiwa[i], self.phiwb[i], self.boson_phiw[i]]
+                for i in range(self.nwalkers)
+            ]
         elif self.boson_phiw is None and self.ncomponents > 1:
-            packed_walkers = [[self.phiwa[i], self.phiwb[i]] for i in range(self.nwalkers)]
+            packed_walkers = [
+                [self.phiwa[i], self.phiwb[i]] for i in range(self.nwalkers)
+            ]
         elif self.boson_phiw is not None and self.ncomponents == 1:
-            packed_walkers = [[self.phiwa[i], self.boson_phiw[i]] for i in range(self.nwalkers)]
+            packed_walkers = [
+                [self.phiwa[i], self.boson_phiw[i]] for i in range(self.nwalkers)
+            ]
         else:
             packed_walkers = [self.phiwa[i] for i in range(self.nwalkers)]
         return packed_walkers
 
-
     def _unpack_walkers(self, new_walkers):
-        r"""unpack tmp walkers into phiwa/b and boson_phiw after population control
-        """
+        r"""unpack tmp walkers into phiwa/b and boson_phiw after population control"""
         if self.boson_phiw is not None and self.ncomponents > 1:
-            self.phiwa = backend.array([new_walkers[i][0] for i in range(self.nwalkers)])
-            self.phiwb = backend.array([new_walkers[i][1] for i in range(self.nwalkers)])
-            self.boson_phiw = backend.array([new_walkers[i][2] for i in range(self.nwalkers)])
+            self.phiwa = backend.array(
+                [new_walkers[i][0] for i in range(self.nwalkers)]
+            )
+            self.phiwb = backend.array(
+                [new_walkers[i][1] for i in range(self.nwalkers)]
+            )
+            self.boson_phiw = backend.array(
+                [new_walkers[i][2] for i in range(self.nwalkers)]
+            )
         elif self.boson_phiw is None and self.ncomponents > 1:
-            self.phiwa = backend.array([new_walkers[i][0] for i in range(self.nwalkers)])
-            self.phiwb = backend.array([new_walkers[i][1] for i in range(self.nwalkers)])
+            self.phiwa = backend.array(
+                [new_walkers[i][0] for i in range(self.nwalkers)]
+            )
+            self.phiwb = backend.array(
+                [new_walkers[i][1] for i in range(self.nwalkers)]
+            )
         elif self.boson_phiw is not None and self.ncomponents == 1:
-            self.phiwa = backend.array([new_walkers[i][0] for i in range(self.nwalkers)])
-            self.boson_phiw = backend.array([new_walkers[i][1] for i in range(self.nwalkers)])
+            self.phiwa = backend.array(
+                [new_walkers[i][0] for i in range(self.nwalkers)]
+            )
+            self.boson_phiw = backend.array(
+                [new_walkers[i][1] for i in range(self.nwalkers)]
+            )
         else:
             self.phiwa = backend.array([new_walkers[i] for i in range(self.nwalkers)])
 
 
 from openms.qmc.trial import multiCI
+
 
 # walker in so orbital (akin ghf walker)
 class Walkers_so(BaseWalkers):
@@ -236,8 +258,8 @@ class Walkers_so(BaseWalkers):
 
     def __init__(self, trial, **kwargs):
 
-        #trial = kwargs.get("trial", None)
-        #if trial is None:
+        # trial = kwargs.get("trial", None)
+        # if trial is None:
         #    raise Exception("Trial WF must be specified in walker")
 
         super().__init__(trial, **kwargs)
@@ -280,7 +302,7 @@ class Walkers_so(BaseWalkers):
             (self.nwalkers, self.nbeta, self.nao), dtype=backend.complex128
         )
 
-
+    @deprecated
     def get_boson_dm(self, trial, boson_phiw):
         r"""Return bosonic DM for each walker
 
@@ -296,7 +318,9 @@ class Walkers_so(BaseWalkers):
             )
 
         # Initialize the bosonic DM
-        boson_DM = backend.zeros((self.nwalkers, boson_size, boson_size), dtype=backend.complex128)
+        boson_DM = backend.zeros(
+            (self.nwalkers, boson_size, boson_size), dtype=backend.complex128
+        )
         # Dictionary to store per-mode DMs
         boson_mode_DM_dict = {}
 
@@ -309,7 +333,9 @@ class Walkers_so(BaseWalkers):
 
         # Compute the density matrix for each mode separately
         start = 0
-        for mode_index, mode_size in enumerate(trial.mol.nboson_states):  # Iterate over each mode
+        for mode_index, mode_size in enumerate(
+            trial.mol.nboson_states
+        ):  # Iterate over each mode
             end = start + mode_size
 
             # Extract the wavefunction for the current mode
@@ -331,10 +357,9 @@ class Walkers_so(BaseWalkers):
 
         return boson_DM, boson_mode_DM_dict
 
-
+    @deprecated
     def get_boson_bdag_plus_b(self, trial, boson_phi):
-        r"""Compute the expectation value of <b^\dag_a + b_a>
-        """
+        r"""Compute the expectation value of <b^\dag_a + b_a>"""
         # This function is almost the same as the get_bdag_plus_b in openms/lib/boson.py
         # Only difference is that here we make this value for each walker.
 
@@ -348,16 +373,62 @@ class Walkers_so(BaseWalkers):
         Qalpha = backend.zeros(trial.mol.nmodes, dtype=backend.complex128)
         sum_boson_DM = {}
         for imode in range(trial.mol.nmodes):
-            sum_boson_DM[imode] = backend.einsum("z, znm->nm", self.weights, boson_mode_DM[imode]) / backend.sum(self.weights)
+            sum_boson_DM[imode] = backend.einsum(
+                "z, znm->nm", self.weights, boson_mode_DM[imode]
+            ) / backend.sum(self.weights)
 
         for mode_index, mdim in enumerate(trial.mol.nboson_states):
-            Qmat = backend.diag(backend.sqrt(backend.arange(1, mdim)), k = 1) \
-                   + backend.diag(backend.sqrt(backend.arange(1, mdim)), k = -1)
+            Qmat = backend.diag(
+                backend.sqrt(backend.arange(1, mdim)), k=1
+            ) + backend.diag(backend.sqrt(backend.arange(1, mdim)), k=-1)
             Qalpha[mode_index] = backend.sum(Qmat * sum_boson_DM[mode_index])
             # Qalpha[mode_index] = backend.sum(Qmat * boson_mode_DM[mode_index])
         # Tr[rho_{a, nm} * Q_{a, nm}]
         logger.debug(self, f"Debug: Updated Qalpha = {Qalpha}")
 
+        return Qalpha
+
+    def walker_displacement_mode(self, boson_phi):
+        r"""For each mode, compute the average displacement across the walkers; that is,
+
+        .. math::
+            \langle Q_\alpha \rangle =
+            \mathrm{Tr}\, \left[
+                \hat{X}_\alpha \sum_i \frac{w_i \rho_i}{\textstyle\sum_i w_i}
+            \right].
+
+        Parameters
+        ----------
+        boson_phi : np.ndarray
+            The walker boson wavefunctions;
+            boson_phi.shape = (nwalker, nmodes, dim_fock, dim_fock)
+
+        Returns
+        -------
+        Qalpha : numpy.ndarray
+            The expected value :math:`\langle \phi \vert a^\dagger_\alpha + a_\alpha \vert \phi \rangle`,
+            for the average walker
+            :math:`\lvert \phi \rangle = \sum_i w_i \lvert \phi_i \rangle / \sqrt{\textstyle\sum_i w_i}`.
+            Qalpha.shape = (nmodes, )
+        """
+
+        # Density matrix of all the walkers
+        rho_walkers = backend.einsum(
+            "wai, waj -> waij", boson_phi, backend.conj(boson_phi)
+        )
+
+        # Average density matrix
+        rho_avg = backend.einsum(
+            "w, waij -> aij", self.weights, rho_walkers
+        ) / backend.sum(self.weights)
+
+        X_modes = displacement_fock(
+            nmodes=boson_phi.shape[1], dim_fock=boson_phi.shape[2]
+        )
+
+        # trace over (dim_fock x dim_fock), not modes
+        Qalpha = backend.einsum("aij, aji -> a", rho_avg, X_modes)
+        logger.debug(self, f"Debug: Updated Qalpha = {Qalpha}")
         return Qalpha
 
 
@@ -375,8 +446,12 @@ class multiCI_Walkers(Walkers_so):
         )
 
         #
-        self.CIa = backend.zeros((self.nwalkers, trial.nao_cas, trial.nalpha_cas), dtype=backend.complex128)
-        self.CIb = backend.zeros((self.nwalkers, trial.nao_cas, trial.nbeta_cas), dtype=backend.complex128)
+        self.CIa = backend.zeros(
+            (self.nwalkers, trial.nao_cas, trial.nalpha_cas), dtype=backend.complex128
+        )
+        self.CIb = backend.zeros(
+            (self.nwalkers, trial.nao_cas, trial.nbeta_cas), dtype=backend.complex128
+        )
 
 
 def make_walkers(trial, walker_options):
@@ -388,4 +463,3 @@ def make_walkers(trial, walker_options):
         return multiCI_Walkers(trial, **walker_options)
     else:
         return Walkers_so(trial, **walker_options)
-
