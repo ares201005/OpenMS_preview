@@ -22,7 +22,7 @@ import numpy
 import sys
 from cqcpy import cc_equations
 from cqcpy import cc_energy
-from . import epcc_equations
+#from . import epcc_equations
 from . import qedcc_equations
 #from . import myqedcc_equations
 from . import myqedcc_equations_opt as myqedcc_equations
@@ -122,6 +122,9 @@ def kernel(mycc, eris=None, t1=None, t2=None, Sn=None, Un=None,
     # ---------------- -----------------------------------------
     # get ERIs
     F, I, w, g, h, G, H = mycc.qed_eris()
+
+    # print ("QED_ERIs run.")
+    # exit()
 
     # orbital energies, denominators, and Fock matrix in spin-orbital basis
     eo = F.oo.diagonal()
@@ -285,7 +288,8 @@ def kernel(mycc, eris=None, t1=None, t2=None, Sn=None, Un=None,
             Eccsd = epcc_energy(T1old,T2old,None, None,F.ov,I.oovv,None, None, None)
 
         if g is not None:
-            nocc = boson_occ(Sn, U1n[0], g.ov, nfock)
+            #nocc = boson_occ(Sn, U1n[0], g.ov, nfock)
+            nocc = [0]
 
         Ediff = abs(Eccsd - Eold)
         if mycc.verbose > 0:
