@@ -180,5 +180,77 @@ class TestMeanFieldCCSD(unittest.TestCase):
             )
 
 
+    def test_qed_hf_energy_consistency(self):
+        """Test that QED-HF mean-field energy matches qed.hf_energy() calculation."""
+        mol = build_molecule()
+        gfac = 0.0
+
+        # Run QED-HF mean-field
+        qedmf = self.build_qed_mf(mol, "qedhf", gfac)
+        qedmf.kernel()
+        mf_energy = qedmf.e_tot
+
+        # Get energy from qed.hf_energy() method
+        qed = qedmf.qed
+        qed.get_mos()
+        qed_hf_energy = qed.hf_energy()
+
+        # Compare the two energies
+        self.assertAlmostEqual(
+            mf_energy,
+            qed_hf_energy,
+            places=8,
+            msg="QED-HF mean-field energy does not match qed.hf_energy() calculation"
+        )
+
+
+    def test_scqed_hf_energy_consistency(self):
+        """Test that SC-QED-HF mean-field energy matches qed.hf_energy() calculation."""
+        mol = build_molecule()
+        gfac = 0.0
+
+        # Run SC-QED-HF mean-field
+        qedmf = self.build_qed_mf(mol, "scqedhf", gfac)
+        qedmf.kernel()
+        mf_energy = qedmf.e_tot
+
+        # Get energy from qed.hf_energy() method
+        qed = qedmf.qed
+        qed.get_mos()
+        qed_hf_energy = qed.hf_energy()
+
+        # Compare the two energies
+        self.assertAlmostEqual(
+            mf_energy,
+            qed_hf_energy,
+            places=8,
+            msg="SC-QED-HF mean-field energy does not match qed.hf_energy() calculation"
+        )
+
+
+    def test_vtqed_hf_energy_consistency(self):
+        """Test that VT-QED-HF mean-field energy matches qed.hf_energy() calculation."""
+        mol = build_molecule()
+        gfac = 0.0
+
+        # Run VT-QED-HF mean-field
+        qedmf = self.build_qed_mf(mol, "vtqedhf", gfac)
+        qedmf.kernel()
+        mf_energy = qedmf.e_tot
+
+        # Get energy from qed.hf_energy() method
+        qed = qedmf.qed
+        qed.get_mos()
+        qed_hf_energy = qed.hf_energy()
+
+        # Compare the two energies
+        self.assertAlmostEqual(
+            mf_energy,
+            qed_hf_energy,
+            places=8,
+            msg="VT-QED-HF mean-field energy does not match qed.hf_energy() calculation"
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

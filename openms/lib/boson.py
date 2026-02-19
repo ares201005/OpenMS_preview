@@ -2061,54 +2061,38 @@ class Photon(Boson):
         # QED-HF
         if type(self._mf) is mqed.qedhf.RHF:
 
-            # OEI in AO basis
+            # Get h1e and vhf in AO basis
             h1_ao = self._mf.get_hcore(self._mol, dm_ao)
+            vhf_ao = self._mf.get_veff(self._mol, dm_ao)
 
-            # Potential construction (testing)
-            TESTING = False
-            TESTING = True
-            if TESTING: # New spin-orbitalification
-                # Potential in AO basis
-                vhf = self._mf.get_veff(self._mol, dm_ao)
+            # Fock matrix in AO basis
+            fock_ao = h1_ao + vhf_ao
 
-                # Fock matrix in AO basis
-                fock_ao = h1_ao + vhf
-
-                # Fock matrix in SO basis
-                fock_so = block_diag(fock_ao, fock_ao)
-
-            else: # Original spin-orbitalification
-                # OEI in SO basis
-                h1_so = block_diag(h1_ao, h1_ao)
-
-                # Build J and K in SO basis
-                ptot = block_diag(self.pa, self.pb)
-                jkbuild = self._mf.get_jk
-                vj, vk = ghf.get_jk(self._mol, dm=ptot, hermi=1, jkbuild=jkbuild)
-
-                # Fock matrix in SO basis
-                fock_so = h1_so + vj - vk
+            # Fock matrix in SO basis
+            fock_so = block_diag(fock_ao, fock_ao)
 
         # SC-QED-HF
         elif type(self._mf) is mqed.scqedhf.RHF:
-            h1_ao = self._mf.get_hcore(self._mol, dm_ao, dress=True)
 
-            # Standard J and K
-            vj, vk = self._mf.get_jk(self._mol, dm=dm_ao, hermi=1)
-            fock_ao = h1_ao + vj + vk
+            # Get h1e and vhf in AO basis (with dress=True to include QED effects)
+            h1e_ao = self._mf.get_hcore(self._mol, dm_ao, dress=True)
+            vhf_ao = self._mf.get_veff(self._mol, dm_ao)
+
+            # Fock matrix in AO basis
+            fock_ao = h1e_ao + vhf_ao
 
             # Convert to spin-orbital basis
             fock_so = block_diag(fock_ao, fock_ao)
 
+        # VT-QED-HF
         elif type(self._mf) is mqed.vtqedhf.RHF:
-            # VT-QED-HF: Include residual (1-f)^2 QED terms
-            h1_ao = self._mf.get_hcore(self._mol, dm_ao)
 
-            # Build J and K with residual DSE terms
-            vj, vk = self._mf.get_jk(self._mol, dm=dm_ao, hermi=1)
-            j_dse, k_dse = self.get_dse_jk(dm_ao, residue=True)
+            # Get h1e in AO basis (VT-QED-HF has different get_hcore)
+            h1e_ao = self._mf.get_hcore(self._mol, dm_ao)
+            vhf_ao = self._mf.get_veff(self._mol, dm_ao)
 
-            fock_ao = h1_ao + vj + vk + j_dse - k_dse
+            # Fock matrix in AO basis
+            fock_ao = h1e_ao + vhf_ao
 
             # Convert to spin-orbital basis
             fock_so = block_diag(fock_ao, fock_ao)
