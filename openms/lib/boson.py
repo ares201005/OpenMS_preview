@@ -19,10 +19,12 @@ from typing import Union, List
 import warnings
 import numpy
 import scipy
-from pyscf import lib
-from openms.lib.misc import deprecated
+
 from pyscf import gto
+from pyscf import lib
 from pyscf.lib import logger
+
+from openms import mqed
 from openms.lib.misc import deprecated
 from openms.qmc.tools import chols_full
 from openms.lib.ov_blocks import one_e_blocks, block_diag
@@ -100,7 +102,7 @@ if NUMBA_AVAILABLE:
 
         nao = eta.shape[1]
         # Number of boson states
-        mdim = nboson_states[imode]
+        mdim = boson_states[imode]
 
         p, q = numpy.ogrid[:nao, :nao]
         diff_eta = eta[imode, p] - eta[imode, q]
@@ -841,9 +843,11 @@ class Boson(object):
         if "couplings_var" in kwargs:
             self.couplings_var = kwargs["couplings_var"]
             self.optimize_varf = False
+
         else:
+            self.couplings_var = numpy.zeros(self.nmodes)
+            self.couplings_var[self.gfac > 0.0] = 0.5
             self.optimize_varf = True
-            self.couplings_var = 0.5 * numpy.ones(self.nmodes)
 
         self.add_dse = kwargs.get("add_dse", True)
 
@@ -1105,6 +1109,8 @@ class Boson(object):
 
         where :math:`\frac{\partial G}{\partial A}` is computed in :func:`displacement_deriv_kernel`.
         """
+        # Variables
+        mdim = self.nboson_states[mode]
 
         # call the universal kernel
         delta_disp_mat = self.displacement_deriv_kernel(mode, factor, pdm)
@@ -1117,30 +1123,45 @@ class Boson(object):
 
         .. math::
              \frac{\partial G}{\partial F} = \frac{\partial G}{\partial A}\frac{\partial A}{\partial F}
+            # Term 1: Gaussian factor derivative
+            tmp1 = genlaguerre(n=i_n, alpha=(i_m - i_n))(factor**2) \
+                   * factor**(i_m - i_n) * -(factor ** 2)
+
+            # Term 2: A^(m-n) derivative
+            tmp2 = genlaguerre(n=i_n, alpha=(i_m - i_n))(factor**2)
+            if i_m - i_n > 1:
+                tmp2 *= (i_m - i_n) * (factor)**(i_m - i_n - 1)
+
+            # Term 3: Laguerre polynomial derivative
+            if i_n > 0:
+                tmp2 -= (factor)**(i_m - i_n) * (factor ** 2) \
+                        * genlaguerre(n=(i_n - 1), alpha=(i_m - i_n + 1))(factor**2)
 
         where :math:`\frac{\partial G}{\partial A}` is computed in :func:`displacement_deriv_kernel`.
         """
+        from scipy.special import genlaguerre
+
+        # Number of boson states
+        mdim = self.nboson_states[mode]
 
         # call the universal kernel
         delta_disp_mat = self.displacement_deriv_kernel(mode, factor, pdm)
+
+        # Compute diagonal elements
+        for ind_m in range(mdim):
+            delta_disp_mat[ind_m, ind_m] = genlaguerre(n=ind_m, alpha=0)(
+                factor**2
+            ) * -(factor**2)
+            if ind_m > 0:
+                delta_disp_mat[ind_m, ind_m] -= (factor**2) * genlaguerre(
+                    n=(ind_m - 1), alpha=1
+                )(factor**2)
 
         # apply chain rule
         return delta_disp_mat * factor
 
     def get_boson_occ(self):
-        r"""Return photon ``mode`` density matrix.
-
-        Parameters
-        ----------
-        mode : int
-            Index for ``mode`` stored in the object.
-
-        Returns
-        -------
-        :class:`~numpy.ndarray`
-            photon mode density matrix
-        """
-
+        r"""Return photon occupation numbers for each mode."""
         nocc = numpy.zeros(self.nmodes)
         for mode in range(self.nmodes):
             mdim = self.nboson_states[mode]
@@ -1722,7 +1743,7 @@ class Photon(Boson):
             )
 
         # bilinear term
-        # off-diaognal (photonic) block
+        # off-diagonal (photonic) block
         idx = 0
         for imode in range(self.nmodes):
             shift = (
@@ -1841,58 +1862,6 @@ class Photon(Boson):
     #     dse_oei : :class:`~numpy.ndarray`
     #         DSE-mediated OEI for all photon modes.
     #     """
-
-    #     warnings.warn(
-    #         "The 'get_dse_hcore' function is deprecated, please use add_oei_ao" +
-    #         "instead because since boson-mediated oei part includes both DSE and bilinear term",
-    #         DeprecationWarning,
-    #         stacklevel=2,
-    #     )
-
-    #     if s1e is None:
-    #         s1e = self._mf.get_ovlp(self._mol)
-
-    #     # Always shift OEI with photon ground state energy
-    #     dse_oei = self.e_boson * s1e / self.nelectron
-
-    #     # DSE contribution
-    #     g_dse = numpy.ones(self.nmodes) if not residue else \
-    #             (self.couplings_res ** 2)
-
-    #     if self.complete_basis:
-    #         dse_oei -= 0.5 * lib.einsum("X, Xpq-> pq", g_dse, self.q_lambda_ao)
-    #     else:
-    #         s_eval, s_evec = scipy.linalg.eigh(s1e)
-    #         idx = s_eval > 1e-15
-    #         s_inv = numpy.dot(s_evec[:, idx] / s_eval[idx], s_evec[:, idx].conj().T)
-
-    #         tmp_term = lib.einsum("Xpr, rs, Xsq-> Xpq", self.gmat, s_inv, self.gmat)
-    #         dse_oei += 0.5 * lib.einsum("X, Xpq-> pq", g_dse, tmp_term)
-    #         del (tmp_term)
-
-    #     # DSE contributions to OEI and total energy from coherent-state representation
-    #     if self.use_cs == True:
-    #         dse_oei += 0.5 * numpy.sum(self.z_alpha**2 * g_dse) * s1e / self.nelectron
-    #         dse_oei -= lib.einsum("X, Xpq-> pq", g_dse * self.z_alpha, self.gmat)
-
-    #     # E-P bilinear coupling contribution
-    #     g_ep = numpy.ones(self.nmodes) if not residue else \
-    #            self.couplings_res
-
-    #     ep_term = numpy.zeros((self.nao, self.nao))
-    #     for a in range(self.nmodes):
-
-    #         shift = s1e * self.z_alpha[a]
-    #         gtmp = (self.gmat[a] - shift) * numpy.sqrt(0.5 * self.omega[a])
-    #         gtmp *= g_ep[a]
-
-    #         ph_exp_val = self.get_bdag_minus_b_expval(a)
-    #         ep_term += (gtmp * ph_exp_val)
-
-    #     dse_oei -= ep_term
-    #     del (g_ep, shift, gtmp, ph_exp_val, ep_term)
-
-    #     return dse_oei
 
     @deprecated
     def get_dse_jk(self, dm, residue=False):  # TODO: Check if this is also depreciated?
@@ -2158,22 +2127,12 @@ class Photon(Boson):
         :class:`~numpy.ndarray`
             Interaction matrix of mode scaled by frequency term.
         """
-        logger.debug(self, " construct bilinear interation term in AO")
+        logger.debug(self, " construct bilinear interaction term in AO")
         g_eb = self.get_polarized_dipole_ao(mode)
         logger.debug(self, f" Norm of gao without w {numpy.linalg.norm(g_eb)}")
         g_eb *= self.couplings_bilinear[mode]
 
         return g_eb
-
-    def get_bdag_minus_b_expval(self, mode):  # TODO: Probably remove this eventually
-
-        mdim = self.nboson_states[mode]
-
-        h_od = numpy.diag(numpy.sqrt(numpy.arange(1, mdim)), k=1) + numpy.diag(
-            numpy.sqrt(numpy.arange(1, mdim)), k=-1
-        )
-        pdm = self.get_boson_dm(mode)
-        return numpy.sum(h_od * pdm)
 
     # -----------------------------------
     # Post-HF integrals (coupled-cluster)
@@ -2182,13 +2141,19 @@ class Photon(Boson):
     def get_omega(self):
         return self.omega
 
-    def get_mos(self):
-        r"""
-        get MO coefficients.
-        """
+    def tmat(self):
+        r"""Returns T-matrix in spin orbital (SO) basis."""
+        t = self._mf.get_hcore()
+        return block_diag(t, t)
 
+    def get_mos(self):
+        r"""Get MO coefficients."""
+
+        # Mean-field object
         mf = self._mf
         self.nmo = 2 * self._mol.nao_nr()
+
+        # Coefficients
         if mf.mo_coeff is None:
             mf.kernel()
         if mf.mo_occ.ndim == 1:
@@ -2197,94 +2162,128 @@ class Photon(Boson):
         else:
             ca, cb = mf.mo_coeff
             na, nb = int(mf.mo_occ[0].sum()), int(mf.mo_occ[1].sum())
+
+        # Make block diagonal for spin-orbital basis
         self.ca, self.cb = ca, cb
         self.na, self.nb = na, nb
+
         self.pa = numpy.einsum("ai,bi->ab", ca[:, :na], ca[:, :na])
         self.pb = numpy.einsum("ai,bi->ab", cb[:, :nb], cb[:, :nb])
+
         self.ptot = block_diag(self.pa, self.pb)
 
-    def tmat(self):
-        """
-        Returns T-matrix in spin orbital (SO) basis.
-        """
-        t = self._mf.get_hcore()
-        return block_diag(t, t)
-
-    def fock(self):
-        from pyscf import scf
-        from pyscf.scf import ghf
-
-        if self.pa is None or self.pb is None:
-            raise Exception("Cannot build Fock without density ")
-
-        h1 = self._mf.get_hcore()
-
-        # add DSE-oei contribution
-        if not self.shift:
-            h1 += self.add_oei_ao(self.pa + self.pb)
-
-        ptot = block_diag(self.pa, self.pb)
-        h1 = block_diag(h1, h1)
-
-        # this only works for bare HF
-        # myhf = scf.GHF(self._mol)
-        # fock = h1 + myhf.get_veff(self._mol, dm=ptot)
-
-        # we use jk_buld from mf object instead
-        jkbuild = self._mf.get_jk
-        vj, vk = ghf.get_jk(self._mol, dm=ptot, hermi=1, jkbuild=jkbuild)
-        # vj, vk = self._mf.get_jk(self._mol, dm=self.pa+self.pb, hermi=1) # in ao
-        fock = h1 + vj - vk
-
-        return fock
-
-    def hf_energy(self):
-        # this only works with bare HF
-        F = self.fock()
-        T = self.tmat()
-        ptot = block_diag(self.pa, self.pb)
-
-        Ehf = numpy.einsum("ij,ji->", ptot, F)
-        Ehf += numpy.einsum("ij,ji->", ptot, T)
-        # print(f"Electronic energy in hf_energy()= {Ehf}")
-        if self.shift:
-            return 0.5 * Ehf + self._mf.energy_nuc() + self.const
-        else:
-            return 0.5 * Ehf + self._mf.energy_nuc()
+        return
 
     def g_fock(self):
+        r"""Construct QED Fock matrix in MO basis with proper blocking.
+
+        Builds the Fock matrix appropriate for the mean-field type:
+        - QED-HF: Standard Fock with QED corrections in AO basis
+        - SC-QED-HF: Fock in canonical MO basis from Gaussian-scaled SCF
+        - VT-QED-HF: Fock with residual (1-f) QED terms
+
+        Returns one_e_blocks with occupied-occupied, occupied-virtual,
+        virtual-occupied, and virtual-virtual blocks.
+        """
+        from pyscf.scf import ghf
+
         if self.ca is None:
             self.get_mos()
 
+        if self.pa is None or self.pb is None:
+            raise Exception("Cannot build Fock without density")
+
+        # Occupied and virtual MO coefficients in spin-orbital basis
         na, nb = self.na, self.nb
         Co = block_diag(self.ca[:, :na], self.cb[:, :nb])
         Cv = block_diag(self.ca[:, na:], self.cb[:, nb:])
 
-        F = self.fock()
-        logger.debug(self, f" -YZ: F.shape = {F.shape}")
-        logger.debug(self, f" -YZ: Norm of F with DSE oei {numpy.linalg.norm(F)}")
+        # Construct density matrix in AO basis
+        dm_ao = self.pa + self.pb
 
+        # Build Fock matrix based on mean-field type
+        # QED-HF
+        if type(self._mf) is mqed.qedhf.RHF:
+
+            # Get h1e and vhf in AO basis
+            h1_ao = self._mf.get_hcore(self._mol, dm_ao)
+            vhf_ao = self._mf.get_veff(self._mol, dm_ao)
+
+            # Fock matrix in AO basis
+            fock_ao = h1_ao + vhf_ao
+
+            # Fock matrix in SO basis
+            fock_so = block_diag(fock_ao, fock_ao)
+
+        # SC-QED-HF
+        elif type(self._mf) is mqed.scqedhf.RHF:
+
+            # Get h1e and vhf in AO basis (with dress=True to include QED effects)
+            h1e_ao = self._mf.get_hcore(self._mol, dm_ao, dress=True)
+            vhf_ao = self._mf.get_veff(self._mol, dm_ao)
+
+            # Fock matrix in AO basis
+            fock_ao = h1e_ao + vhf_ao
+
+            # Convert to spin-orbital basis
+            fock_so = block_diag(fock_ao, fock_ao)
+
+        # VT-QED-HF
+        elif type(self._mf) is mqed.vtqedhf.RHF:
+
+            # Get h1e in AO basis (VT-QED-HF has different get_hcore)
+            h1e_ao = self._mf.get_hcore(self._mol, dm_ao)
+            vhf_ao = self._mf.get_veff(self._mol, dm_ao)
+
+            # Fock matrix in AO basis
+            fock_ao = h1e_ao + vhf_ao
+
+            # Convert to spin-orbital basis
+            fock_so = block_diag(fock_ao, fock_ao)
+
+        else:
+            raise ValueError(f"Mean-field type {type(self._mf)} not recognized.")
+
+        logger.debug(self, f"Fock matrix shape = {fock_so.shape}")
+        logger.debug(self, f"Norm of Fock matrix = {numpy.linalg.norm(fock_so)}")
+
+        # Transform to MO basis and extract blocks
+        # TODO: Coherent state shift logic in a better spot?
         if self.shift:
-            Foo = numpy.einsum("pi,pq,qj->ij", Co, F, Co) - 2 * numpy.einsum(
+            # Apply shift corrections (for specific QED methods)
+            Foo = numpy.einsum("pi,pq,qj->ij", Co, fock_so, Co) - 2 * numpy.einsum(
                 "I,pi,Ipq,qj->ij", self.xi, Co, self.gmatso, Co
             )
-            Fov = numpy.einsum("pi,pq,qa->ia", Co, F, Cv) - 2 * numpy.einsum(
+            Fov = numpy.einsum("pi,pq,qa->ia", Co, fock_so, Cv) - 2 * numpy.einsum(
                 "I,pi,Ipq,qa->ia", self.xi, Co, self.gmatso, Cv
             )
-            Fvo = numpy.einsum("pa,pq,qi->ai", Cv, F, Co) - 2 * numpy.einsum(
+            Fvo = numpy.einsum("pa,pq,qi->ai", Cv, fock_so, Co) - 2 * numpy.einsum(
                 "I,pa,Ipq,qi->ai", self.xi, Cv, self.gmatso, Co
             )
-            Fvv = numpy.einsum("pa,pq,qb->ab", Cv, F, Cv) - 2 * numpy.einsum(
+            Fvv = numpy.einsum("pa,pq,qb->ab", Cv, fock_so, Cv) - 2 * numpy.einsum(
                 "I,pa,Ipq,qb->ab", self.xi, Cv, self.gmatso, Cv
             )
         else:
-            Foo = numpy.einsum("pi,pq,qj->ij", Co, F, Co)
-            Fov = numpy.einsum("pi,pq,qa->ia", Co, F, Cv)
-            Fvo = numpy.einsum("pa,pq,qi->ai", Cv, F, Co)
-            Fvv = numpy.einsum("pa,pq,qb->ab", Cv, F, Cv)
+            # Standard MO transformation
+            Foo = numpy.einsum("pi,pq,qj->ij", Co, fock_so, Co)
+            Fov = numpy.einsum("pi,pq,qa->ia", Co, fock_so, Cv)
+            Fvo = numpy.einsum("pa,pq,qi->ai", Cv, fock_so, Co)
+            Fvv = numpy.einsum("pa,pq,qb->ab", Cv, fock_so, Cv)
+
         return one_e_blocks(Foo, Fov, Fvo, Fvv)
 
     def get_I(self, full=False):
+        r"""Compute two-electron repulsion integrals in MO basis.
+
+        For QED-HF: Adds DSE term to bare ERI in AO, then transforms to MO
+        For SC-QED-HF: Applies Gaussian FC factors in dipole basis, transforms to MO
+        For VT-QED-HF: Applies Gaussian factors + residual DSE (1-f)^2, transforms to MO
+
+        Returns
+        -------
+        two_e_blocks or ndarray
+            Two-electron integrals in MO basis, either full or in blocks
+        """
         from pyscf import ao2mo
 
         if self.ca is None:
@@ -2292,34 +2291,23 @@ class Photon(Boson):
 
         nao = self.nmo // 2
         na, nb = self.na, self.nb
-        C = numpy.hstack((self.ca, self.cb))
+        mo_coeff = numpy.hstack((self.ca, self.cb))
 
-        if False:  # TODO: potential error? if full==False?
-            # don't add DSE-mediated eri
-            eri = ao2mo.general(
-                self._mol,
-                [
-                    C,
-                ]
-                * 4,
-                compact=False,
-            ).reshape(
-                [
-                    self.nmo,
-                ]
-                * 4
-            )
-        else:
-            # add the DSE-mediated eri
-            bare_eri = self._mol.intor("int2e", aosym="s1")
+        bare_eri = self._mol.intor("int2e", aosym="s1")
+
+        ##################
+        # QED-HF: Standard approach with DSE term
+        if type(self._mf) is mqed.qedhf.RHF:
+            # Add DSE-mediated contribution to ERI in AO basis
             for mode in range(self.nmodes):
                 bare_eri += numpy.einsum(
                     "pq,rs->pqrs", self.gmat[mode], self.gmat[mode]
                 )
-            eri = ao2mo.general(
+            # Transform to MO basis
+            eri_mo = ao2mo.general(
                 bare_eri,
                 [
-                    C,
+                    mo_coeff,
                 ]
                 * 4,
                 compact=False,
@@ -2330,6 +2318,110 @@ class Photon(Boson):
                 * 4
             )
 
+        # SC-QED-HF: Apply Gaussian factors in dipole basis, then transform to MO
+        elif type(self._mf) is mqed.scqedhf.RHF:
+            # For SC-QED-HF, MO coefficients are in AO basis (not dipole)
+            # but we need to apply Gaussian scaling in dipole basis
+            for mode in range(self.nmodes):
+                U_ao2dip = self._mf.ao2dipole[mode]
+
+                # Transform bare ERI to dipole basis
+                eri_dipole = numpy.einsum(
+                    "pu, qv, rw, st, pqrs-> uvwt",
+                    U_ao2dip,
+                    U_ao2dip,
+                    U_ao2dip,
+                    U_ao2dip,
+                    bare_eri,
+                    optimize=True,
+                )
+
+                # Apply Gaussian factor scaling in dipole basis
+                fc_factor = self._mf.FC_factor(self._mf.eta, mode, onebody=False)
+                eri_dipole *= fc_factor
+
+                # For SC-QED-HF, the MO coefficients C are in AO basis
+                # We need to transform: dipole -> AO -> MO
+                # This is equivalent to: C_dipole = U^{-1} @ C_ao
+                U_inv = numpy.linalg.inv(U_ao2dip)
+                C_dipole = numpy.dot(U_inv, mo_coeff)
+
+                # Transform ERI from dipole basis to MO basis directly
+                eri_mo = ao2mo.general(
+                    eri_dipole,
+                    [
+                        C_dipole,
+                    ]
+                    * 4,
+                    compact=False,
+                ).reshape(
+                    [
+                        self.nmo,
+                    ]
+                    * 4
+                )
+
+                # Update bare_eri for next mode (if multi-mode)
+                bare_eri = eri_dipole
+
+        # VT-QED-HF: Gaussian factors + residual DSE
+        elif type(self._mf) is mqed.vtqedhf.RHF:
+            # Similar to SC-QED-HF but with additional residual DSE term
+            for mode in range(self.nmodes):
+                U_ao2dip = self._mf.ao2dipole[mode]
+
+                # Transform bare ERI to dipole basis
+                eri_dipole = numpy.einsum(
+                    "pu, qv, rw, st, pqrs-> uvwt",
+                    U_ao2dip,
+                    U_ao2dip,
+                    U_ao2dip,
+                    U_ao2dip,
+                    bare_eri,
+                    optimize=True,
+                )
+
+                # Apply Gaussian factor scaling
+                fc_factor = self._mf.FC_factor(self._mf.eta, mode, onebody=False)
+                eri_dipole *= fc_factor
+
+                # Add residual DSE terms in dipole basis: (1-f)^2 * g_dipole ⊗ g_dipole
+                residual_factor = self.couplings_res[mode] ** 2
+                # g_dipole = U @ g_ao @ U^T, but diagonal in dipole basis is just g_DO[mode]
+                g_dipole = numpy.einsum(
+                    "pu, pq, qv-> uv", U_ao2dip, self.gmat[mode], U_ao2dip
+                )
+                dse_term_dipole = numpy.einsum("pq, rs-> pqrs", g_dipole, g_dipole)
+                eri_dipole += residual_factor * dse_term_dipole
+
+                # Transform from dipole basis to MO basis
+                U_inv = numpy.linalg.inv(U_ao2dip)
+                C_dipole = numpy.dot(U_inv, mo_coeff)
+
+                eri_mo = ao2mo.general(
+                    eri_dipole,
+                    [
+                        C_dipole,
+                    ]
+                    * 4,
+                    compact=False,
+                ).reshape(
+                    [
+                        self.nmo,
+                    ]
+                    * 4
+                )
+
+                # Update for next mode
+                bare_eri = eri_dipole
+
+        else:
+            raise ValueError(f"Mean-field type {type(self._mf)} not recognized.")
+
+        ##################
+
+        # Zero out spin-flip terms
+        eri = eri_mo
         eri[:nao, nao:] = eri[nao:, :nao] = eri[:, :, :nao, nao:] = eri[
             :, :, nao:, :nao
         ] = 0
@@ -2409,7 +2501,8 @@ class Photon(Boson):
         return (g, g)
 
     def get_gmat_so(self):
-        r"""e-photon coupling matrix in SO basis."""
+        r"""Electron-photon coupling matrix in spin-orbital basis."""
+
         if self.dipole_ao is None:
             self.get_dipole_ao()
         if self.quadrupole_ao is None:
@@ -2417,12 +2510,10 @@ class Photon(Boson):
         if self.pa is None:
             self.get_mos()
 
+        # AO basis
         self.get_gmat_ao()
-        # gmatso
-        # gmatso = [
-        #    block_diag(self.gmat[i], self.gmat[i]) for i in range(len(self.gmat))
-        # ]
-        # add factor of sqrt(w/2) into the coupling
+
+        # Add factor of sqrt(w/2) into the coupling
         gmatso = [
             block_diag(
                 self.gmat[i] * numpy.sqrt(self.omega[i] / 2),
@@ -2433,14 +2524,48 @@ class Photon(Boson):
         self.gmatso = numpy.asarray(gmatso)
         logger.debug(self, f" -YZ: Norm of gmatso: {numpy.linalg.norm(self.gmatso)}")
 
+        # Apply shift
         if self.shift:
             self.xi = numpy.einsum("Iab,ab->I", self.gmatso, self.ptot) / self.omega
             self.const = -numpy.einsum("I,I->", self.omega, self.xi**2)
-            # print("Test: DSE enrgy is", self.const)
 
         return self
 
     kernel = get_gmat_so
+
+    def hf_energy(self):
+        r"""Compute HF energy using the QED Fock matrix.
+
+        Uses the occupied-occupied block of the Fock matrix from g_fock(),
+        which handles QED-HF, SC-QED-HF, and VT-QED-HF appropriately.
+
+        The HF energy is computed as:
+        E_HF = 0.5 * Tr[(F + h) * P] + E_nuc
+
+        In the MO basis with occupied orbitals, this becomes:
+        E_HF = 0.5 * sum_i (F_ii + h_ii) + E_nuc
+        """
+        if self.pa is None:
+            self.get_mos()
+
+        # Get Fock matrix blocks in MO basis
+        F_blocks = self.g_fock()
+        F_oo = F_blocks.oo  # Occupied-occupied block
+
+        # Get one-electron matrix in MO basis
+        T_so = self.tmat()
+        na, nb = self.na, self.nb
+        Co = block_diag(self.ca[:, :na], self.cb[:, :nb])
+        h_oo = numpy.einsum("pi,pq,qj->ij", Co, T_so, Co)
+
+        # Compute electronic energy: E = 0.5 * sum_i (F_ii + h_ii)
+        Ehf = 0.5 * (numpy.trace(F_oo) + numpy.trace(h_oo))
+
+        # Add nuclear repulsion and shift correction if applicable
+        if self.shift:
+            return Ehf + self._mf.energy_nuc() + self.const
+        else:
+            return Ehf + self._mf.energy_nuc()
 
 
 # class phonon which will compute the phonon modes and e-ph coupling strength
