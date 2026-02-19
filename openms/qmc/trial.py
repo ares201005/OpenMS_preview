@@ -913,10 +913,16 @@ class TrialHF(TrialWFBase):
         """
         ovlp = None
         # for many-bosons, there should be a permanent
+        nmodes = self.boson_psi.shape[0]
+        dim_fock = self.boson_psi.shape[1]
+        nwalkers = walkers.boson_phiw.shape[0]
         if walkers.boson_phiw is not None:
-            ovlp = backend.einsum(
-                "am, wan -> w", self.boson_psi.conj(), walkers.boson_phiw
-            )
+            psi = self.boson_psi.reshape(nmodes * dim_fock)
+            phiw = walkers.boson_phiw.reshape(nwalkers, nmodes * dim_fock)
+            ovlp = backend.dot(phiw, psi.conj())
+            # ovlp = backend.einsum(
+            #    "am, wan -> w", self.boson_psi.conj(), walkers.boson_phiw
+            # )
             # sb = backend.dot(walkers.boson_phiw, self.boson_psi.conj())
             # sb = backend.einsum("N, zN->z", self.boson_psi.conj(), walkers.boson_phiw)
         return ovlp

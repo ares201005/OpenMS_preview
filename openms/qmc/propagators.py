@@ -135,7 +135,7 @@ if NUMBA_AVAILABLE:
 
     @njit(parallel=True, fastmath=True)
     def propagate_exp_op_numba(phiw, op, order):
-        """
+        r"""
         Apply exponential operator via Taylor expansion:
 
         .. math::
@@ -1732,8 +1732,7 @@ class PhaselessElecBoson(Phaseless):
         # walkers.weights *= backend.exp(-dt * eloc.real)
         logger.debug(
             self,
-            f"Debug: bosonic WF after free boson: shape = {walkers.boson_phiw.shape},\n "
-            + f"{abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}",
+            f"Debug: bosonic WF after free boson: {abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}",
         )
 
     def propagate_bosons_1st(self, trial, walkers, dt):
@@ -2015,8 +2014,7 @@ class PhaselessElecBoson(Phaseless):
         #
         logger.debug(
             self,
-            f"Debug: bosonic WF before one propagation: shape = {walkers.boson_phiw.shape},\n "
-            + f"{abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}",
+            f"Debug: bosonic WF before one propagation: {abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}",
         )
 
         if not self.turnoff_bosons:
@@ -2059,11 +2057,6 @@ class PhaselessElecBoson(Phaseless):
             self.propagate_bosons(trial, walkers, 0.5 * self.dt)
             self.wt_boson += time.time() - t0
 
-            logger.debug(
-                self,
-                f"Debug: bosonic WF after bilinear: shape = {walkers.boson_phiw.shape},\n "
-                + f"{abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}",
-            )
         # print(f"Debug: bosonic WF: {abs(backend.sum(walkers.boson_phiw, axis=0)) / walkers.nwalkers}")
 
         #
