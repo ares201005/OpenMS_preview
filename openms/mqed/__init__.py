@@ -35,7 +35,7 @@ for solving the molecular quantum electrodynamics (mQED) Hamiltonian.
 
 """
 
-#from . import ccsd
+from . import ccsd
 #from . import diis
 #from . import ms_qedhf
 #from . import qedcc_equations

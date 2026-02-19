@@ -256,6 +256,7 @@ def kernel(mf, conv_tol=1e-10, conv_tol_grad=None,
     # Initial electronic energy
     h1e = mf.get_hcore(mol, dm, dress=True)
     vhf = mf.get_veff(mol, dm)
+
     e_tot = mf.energy_tot(dm, h1e, vhf)
     logger.info(mf, 'init E= %.15g', e_tot)
 
@@ -333,7 +334,7 @@ def kernel(mf, conv_tol=1e-10, conv_tol_grad=None,
 
         # update energy
         time1 = time.time()
-        vhf = mf.get_veff(mol, dm, dm_last, vhf)
+        vhf = mf.get_veff(mol, dm)
         time_veff = time.time() - time1
 
         h1e = mf.get_hcore(mol, dm, dress=True)
@@ -385,7 +386,7 @@ def kernel(mf, conv_tol=1e-10, conv_tol_grad=None,
         mo_energy, mo_coeff = mf.eig(fock, s1e)
         mo_occ = mf.get_occ(mo_energy, mo_coeff)
         dm, dm_last = mf.make_rdm1(mo_coeff, mo_occ), dm
-        vhf = mf.get_veff(mol, dm, dm_last, vhf)
+        vhf = mf.get_veff(mol, dm)
 
         # Final update of photonic component
         mf.qed.update_cs(dm)
@@ -419,16 +420,17 @@ def kernel(mf, conv_tol=1e-10, conv_tol_grad=None,
 
 class RHF(qedhf.RHF):
     r"""Non-relativistic SC-QED-RHF subclass."""
+
     def __init__(self, mol, **kwargs):
 
         super().__init__(mol, **kwargs)
 
+        # Cholesky
+        self.P = self.L = None
+
         self.ltensor = None
         self.CD_anyway = kwargs.get("CD_anyway", False)
         self.CD_thresh = kwargs.get("CD_thresh", 1.e-8)
-
-        if "vtqedhf" not in openms.runtime_refs:
-            openms.runtime_refs.append("vtqedhf")
 
         self.ao2dipole = numpy.zeros_like(self.qed.gmat)
         self.dm_do = numpy.zeros_like(self.qed.gmat)
@@ -442,17 +444,17 @@ class RHF(qedhf.RHF):
         # # Flag to construct eta-eta Hessian matrix
         # self.second_order_eta_step = False
 
-        # Parameters for dipole moment basis set degeneracy # TODO: Check if being used?
+        # Parameters for dipole moment basis set degeneracy
         self.dipole_degen_thresh = 1.0e-8
         self.dipole_fock_shift = 1.0e-3
 
-        self.qed.couplings_var = numpy.ones(self.qed.nmodes)
-        self.qed.update_couplings()
-        if type(self) is scqedhf.RHF: # Don't need this check, since this is SC __init__?
+        # Set transformation parameters to 1 for SC-QED-HF
+        if type(self) is scqedhf.RHF:
             self.qed.use_cs = False
+            self.qed.couplings_var = numpy.ones(self.qed.nmodes)
 
-        # Cholesky
-        self.P = self.L = None
+        # Update QED coupling values
+        self.qed.update_couplings()
 
         # TODO: replace it with our general DIIS
         self.diis_space = 20
@@ -627,9 +629,6 @@ class RHF(qedhf.RHF):
                              = &
         """
 
-        # if self.second_order_eta_step == True:
-        #     self.eta_hessian = numpy.zeros((self.qed.nmodes, self.nao, self.nao))
-
         for imode in range(self.qed.nmodes):
             onebody_deta = numpy.zeros(self.nao)
             twobody_deta = numpy.zeros(self.nao)
@@ -670,74 +669,7 @@ class RHF(qedhf.RHF):
 
             self.eta_grad[imode] = onebody_deta + twobody_deta
 
-            # ### TODO: temporary, may move to better spot?
-            # ### TODO: Check grad norm before computing Hessian?
-            # if self.second_order_eta_step:
-            #     self.eta_hessian[imode] = self.get_eta_hessian(dm_do, imode)
-
         return self
-
-
-    # def get_eta_hessian(self, dm_do, imode):
-    #     r"""Construct eta-eta Hessian matrix for 2nd order eta gradient step."""
-
-    #     # One-body indices
-    #     p, q = numpy.ogrid[:self.nao, :self.nao]
-
-    #     # Gaussian factor
-    #     fc_factor = self.FC_factor(self.eta, imode)  # (nao, nao)
-
-    #     # Construct Hessian matrix
-    #     hessian = numpy.zeros((self.nao, self.nao))
-
-    #     # Diagonal terms of Hessian
-    #     hessian += numpy.diag(2.0 * dm_do[imode].diagonal() / self.qed.omega[imode])
-
-    #     # One-body terms
-    #     eta_diff = (((self.eta[imode, p] - self.eta[imode, q]) / self.qed.omega[imode])**2 - 1.0)
-    #     one_body = (2.0 / self.qed.omega[imode]**2) * self.h1e_DO * dm_do[imode] * fc_factor * eta_diff
-
-    #     # Add to Hessian
-    #     hessian += numpy.diag(numpy.sum(one_body, axis=1))
-    #     hessian -= one_body
-
-    #     # Delete first set of one-body terms
-    #     del fc_factor, eta_diff, one_body, p, q
-
-    #     # Another one-body term
-    #     dm_do_diag = numpy.outer(dm_do[imode].diagonal(), dm_do[imode].diagonal())
-
-    #     # Add to Hessian
-    #     hessian += 2.0 * (dm_do_diag - 0.5 * dm_do[imode] * dm_do[imode].T) / self.qed.omega[imode]
-
-    #     # Delete other one-body term
-    #     del dm_do_diag
-
-    #     ###
-
-    #     # Two-body indices
-    #     p, r, q, s = numpy.ogrid[:self.nao, :self.nao, :self.nao, :self.nao]
-
-    #     # Gaussian factor
-    #     fc_factor = self.FC_factor(self.eta, imode, onebody=False)  # (nao, nao, nao, nao)
-
-    #     # Two-body terms
-    #     density_mat = (dm_do[imode][:, :, None, None] * dm_do[imode][None, None, :, :]
-    #         - 0.5 * dm_do[imode][:, None, None, :] * dm_do[imode][None, :, :, None])
-
-    #     eta_diff = (((self.eta[imode, p] - self.eta[imode, r] \
-    #                   + self.eta[imode, q] - self.eta[imode, s]) / self.qed.omega[imode])**2 - 1.0)
-    #     two_body = (2.0 / self.qed.omega[imode]**2) * self.eri_DO * fc_factor * eta_diff * density_mat
-
-    #     # Add to Hessian
-    #     hessian += numpy.diag(two_body.sum(axis=(1, 2, 3)))
-    #     hessian += two_body.sum(axis=(1, 3))
-    #     hessian -= two_body.sum(axis=(2, 3))
-    #     hessian -= two_body.sum(axis=(1, 2))
-
-    #     # Invert and return the Hessian
-    #     del fc_factor, density_mat, eta_diff, two_body
-    #     return numpy.linalg.inv(hessian)
 
 
     # variable gradients, here we only have eta
@@ -976,8 +908,8 @@ class RHF(qedhf.RHF):
         return h1e
 
 
-    def get_veff(self, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
-        r"""QED Hartree-Fock potential matrix for the given density matrix
+    def get_veff(self, mol=None, dm=None):
+        r"""SC-QED-HF potential matrix using get_jk method.
 
         .. math::
             V_{eff} = J - K/2 + \bra{i}\lambda\cdot\mu\ket{j}
@@ -994,91 +926,185 @@ class RHF(qedhf.RHF):
             -D_{qp}\tilde{g}_{pq} * \tilde{g}_{qq}
 
         Thus the digonal element is :math:` g_pq(p)**2`.
-        """
-        nao = self.nao
 
+        This method should produce identical results to get_veff, but separates
+        the DSE contributions into the get_jk method for clarity.
+        """
         if mol is None: mol = self.mol
         if dm is None: dm = self.make_rdm1()
 
-        # work for single mode only at this moment
+        # Single mode only for now
         imode = 0
-        U = self.ao2dipole[imode]
-        dm_do = self.get_dm_do(dm, U)
+        Umat = self.ao2dipole[imode]
+        dm_do = self.get_dm_do(dm, Umat)
 
-        ## vectorized code
-        # Tr[g_pq * D] in DO
-        g_dot_D = numpy.diagonal(dm_do) @ self.g_dipole[imode, :]
+        # Get DSE contributions in dipole basis
+        vj_dse_do, vk_dse_do = self.get_jk(mol, dm, imode)
+        vhf_do = vj_dse_do + vk_dse_do
 
-        p_indices = numpy.arange(nao)
-        vhf_do = numpy.zeros((nao, nao))
-        vhf_do[p_indices, p_indices] += (2.0 * self.g_dipole[imode, p_indices] * g_dot_D -
-                                         numpy.square(self.g_dipole[imode, p_indices]) \
-                                         * dm_do[p_indices, p_indices]) / self.qed.omega[0]
-
-        vhf_do_offdiag = numpy.zeros_like(vhf_do)
-
-        # Calculate off-diagonal elements
-        p, q = numpy.triu_indices(nao, k=1)
-        vhf_do_offdiag[p, q] -= self.g_dipole[imode, p] * self.g_dipole[imode, q] * dm_do[q, p] / self.qed.omega[0]
-        vhf_do_offdiag[q, p] = vhf_do_offdiag[p, q]  # Exploit symmetry
-        vhf_do += vhf_do_offdiag
-
-        mdim = self.qed.nboson_states[0]
-        # effective photonic Hamiltonian from the dressed electronic Hamiltonian
-        if mdim > 1:
+        # Effective photonic Hamiltonian from the dressed electronic Hamiltonian
+        if self.qed.nboson_states[imode] > 1:
             _ = self.FC_factor(self.eta, imode)
             self.qed.Hph_sc = lib.einsum("pq, mpq->m", self.h1e_DO*dm_do, self.qed.disp_mat_1e, optimize=True)
 
+        # Add FC-factor-scaled two-body electron-electron repulsion
         if self.ltensor is not None:
-            vhf = numpy.zeros((nao, nao))
-            t0 = time.time()
+            vhf_ee = numpy.zeros((self.nao, self.nao))
 
-            # vj, vk = self.get_JK_numpy(dm_do)
-            # vhf = vj - 0.5 * vk
-
-            for p in range(nao):
-                for q in range(nao):
-                # for q in range(p, nao): # FIXME: the symmetry is problematic for mdim > 1
-                    # do a one-body FC factor with shift
+            for p in range(self.nao):
+                for q in range(self.nao):
+                    # Compute one-body FC factor with shift
                     shift = self.eta[imode, p] - self.eta[imode, q]
                     fc_factor = self.FC_factor(self.eta, imode, onebody=True, shift=shift)
 
-                    # Ieff = numpy.einsum('X, Xrs->rs', self.ltensor[:, p, q], self.ltensor) - \
-                    #        0.5 * numpy.einsum('Xs, Xr->rs', self.ltensor[:, p, :], self.ltensor[:, :,q])
-                    # vhf[p, q] = numpy.sum(Ieff * dm_do * fc_factor)
-                    J = numpy.tensordot(self.ltensor[:, p, q], self.ltensor, axes=(0, 0))
+                    Jmat = numpy.tensordot(self.ltensor[:, p, q], self.ltensor, axes=(0, 0))
+                    Kmat = numpy.einsum('Xs, Xr->rs', self.ltensor[:, p, :], self.ltensor[:, :, q], optimize=True)
 
-                    K = numpy.einsum('Xs, Xr->rs', self.ltensor[:, p, :], self.ltensor[:, :, q], optimize=True)
-                    Ieff = J - 0.5 * K
+                    Ieff = Jmat - 0.5 * Kmat
                     v0 = Ieff * dm_do
-                    vhf[p, q] = numpy.sum(v0 * fc_factor)
-                    # vhf[q, p] = vhf[p, q]
+                    vhf_ee[p, q] = numpy.sum(v0 * fc_factor)
 
-                    # effective photonic Hamiltonian from the dressed electronic Hamiltonian (two-e part)
-                    if mdim > 1:
+                    # Effective photonic Hamiltonian from the dressed electronic Hamiltonian (two-e part)
+                    if self.qed.nboson_states[imode] > 1:
                         tmp = numpy.einsum("mrs, rs->m", self.qed.disp_mat_1e, v0)
-                        self.qed.Hph_sc += 0.5 * tmp * dm_do[p, q]           # diagonal
+                        self.qed.Hph_sc += 0.5 * tmp * dm_do[p, q]
 
-            t1 = time.time()
         else:
-            # vectorized code
+            # Vectorized code for FC-factor-scaled two-body contributions
             fc_factor = self.FC_factor(self.eta, imode, onebody=False)
             fc_factor *= (1.0 * self.eri_DO - 0.5 * self.eri_DO.transpose(0, 3, 2, 1))
-            vhf = 0.5 * lib.einsum('pqrs, rs->pq', fc_factor, dm_do, optimize=True)
-            # vhf += 0.5 * lib.einsum('qprs, rs->pq', fc_factor, dm_do, optimize=True)
-            vhf += vhf.T
-            if mdim > 1:
-                # effective photonic Hamiltonian from the dressed electronic Hamiltonian (two-e part)
+            vhf_ee = 0.5 * lib.einsum('pqrs, rs->pq', fc_factor, dm_do, optimize=True)
+            vhf_ee += vhf_ee.T
+
+            if self.qed.nboson_states[imode] > 1:
+                # Effective photonic Hamiltonian from the dressed electronic Hamiltonian (two-e part)
                 tmp = self.qed.disp_mat_2e[:] * (self.eri_DO - 0.5 * self.eri_DO.transpose(0, 3, 2, 1))
                 self.qed.Hph_sc += 0.5 * lib.einsum('mpqrs, pq, rs->m', tmp, dm_do, dm_do, optimize=True)
 
-        vhf_do += vhf
+        vhf_do += vhf_ee
 
-        # transform back to AO
-        Uinv = linalg.inv(U)
+        # Transform back to AO basis
+        Uinv = linalg.inv(Umat)
         vhf = unitary_transform(Uinv, vhf_do)
 
         return vhf
+
+
+    def get_jk(self, mol=None, dm=None, imode=0, return_ao=False, hermi=1, with_j=True, with_k=True, omega=None):
+        r"""Compute DSE-mediated Coulomb (J) and Exchange (K) matrices scaled by Gaussian factors."""
+        if mol is None: mol = self.mol
+        if dm is None: dm = self.make_rdm1()
+
+        # Transform density matrix to dipole basis
+        Umat = self.ao2dipole[imode]
+        dm_do = self.get_dm_do(dm, Umat)
+
+        # Initialize J and K matrices
+        vj_dse_do = numpy.zeros((self.nao, self.nao))
+        vk_dse_do = numpy.zeros((self.nao, self.nao))
+
+        # Coulomb (J) matrix contributions
+        if with_j:
+
+            # Compute Tr[g * D] in dipole basis
+            g_dot_D = numpy.diagonal(dm_do) @ self.g_dipole[imode, :]
+
+            # Diagonal contributions
+            p_ind = numpy.arange(self.nao)
+            vj_dse_do[p_ind, p_ind] += (
+                2.0 * self.g_dipole[imode, p_ind] * g_dot_D
+                / self.qed.omega[imode]
+            )
+
+            # Off-diagonal contributions
+            p, q = numpy.triu_indices(self.nao, k=1)
+            vj_offdiag = numpy.zeros_like(vj_dse_do)
+            vj_offdiag[p, q] -= (
+                self.g_dipole[imode, p] * self.g_dipole[imode, q] * dm_do[q, p]
+                / self.qed.omega[imode]
+            )
+            vj_offdiag[q, p] = vj_offdiag[p, q]
+            vj_dse_do += vj_offdiag
+
+        # Exchange (K) matrix contributions
+        if with_k:
+
+            # Diagonal contributions
+            p_ind = numpy.arange(self.nao)
+            vk_dse_do[p_ind, p_ind] -= (
+                numpy.square(self.g_dipole[imode, p_ind]) * dm_do[p_ind, p_ind]
+                / self.qed.omega[imode]
+            )
+
+        # Transform back to AO basis if requested
+        if return_ao:
+            Uinv = linalg.inv(Umat)
+            vj_dse = unitary_transform(Uinv, vj_dse_do)
+            vk_dse = unitary_transform(Uinv, vk_dse_do)
+        else:
+            vj_dse = vj_dse_do
+            vk_dse = vk_dse_do
+
+        return vj_dse, vk_dse
+
+
+    def get_jk_chols(self, mol=None, dm=None, hermi=1, with_j=True, with_k=True, omega=None):
+        r"""get jk matrix in the in DO and with chols
+
+        .. math::
+
+            I_{ijkl} = I^e_{ijkl} + g_{ij}g_{kl}
+
+        where :math:`I^e` is the pure electronci two-body integral.
+        the latter term counts for the photon-mediated correlations
+
+        .. math::
+
+            J_{uv} &= \sum_{ls} D_{ls}(uv|ls) \\
+            K_{uv} &= \sum_{ls} D_{ls}(us|lv)
+
+        Hence, the photon-mediated part of JK is:
+
+        .. math::
+
+            J^p_{uv} &= \sum_{ls} D_{ls}(uv|ls) = \sum_{ls} D_{ls} g_{uv} g_{ls} \\
+            K^p_{uv} &= \sum_{ls} D_{ls} g_{us} g_{lv}
+
+        """
+        # Note the incore version, which initializes an _eri array in memory.
+        if mol is None:
+            mol = self.mol
+        if dm is None:
+            dm = self.make_rdm1()
+            dm = self.get_dm_do(dm, self.ao2dipole)
+
+        vj = vk = None
+
+        # replace the following with chols, without using eri_DO
+        fc_factor = self.FC_factor(self.eta, imode, onebody=False)
+        fc_factor *= (1.0 * self.eri_DO - 0.5 * self.eri_DO.transpose(0, 3, 2, 1))
+        # G_{pqrs} * [I_{pqrs} - 0.5 * I_{ps rq} ] * rho_{rs}
+        # = L_{\gamma, pq} L_{\gamma, rs} * \rho_{rs}
+        # - L_{\gamma, pq} L_{\gamma, rs} * \rho_{rq}
+
+        # vj = G_{pqrs} I_{pqrs} * \rho_{rs}
+        #    = G_{pqrs} L_{\gamma, pq} L_{\gamma, rs} * \rho_{rs}
+
+        # vk = G_{psrq} I_{psrq} * \rho_{rs}
+        #    = G_{psrq} L_{\gamma, ps} L_{\gamma, rq} * \rho_{rs}
+
+        # the above is the same as the following, using the following if we
+        # want to separate it into vj and vk
+
+        # add dressing factor to two-body integrals (todo)
+        for imode in range(self.qed.nmodes):
+            #U = self.ao2dipole[imode]
+            factor = self.FC_factor(self.eta, imode, onebody=False)
+            eri_tmp = self.eri_DO * factor
+            vj, vk = hf.dot_eri_dm(eri_tmp, dm, hermi, with_j, with_k)
+            del eri_tmp
+
+        return vj, vk
 
 
     def norm_var_params(self):
@@ -1174,6 +1200,64 @@ class RHF(qedhf.RHF):
         return rho_tot, rho_e, rho_b
 
 
+    def compute_fock_state_basis_mos(self, imode=0):
+        r"""Transform by displacement operator to Fock state representation."""
+        from scipy.special import genlaguerre, factorial
+
+        # Photonic coefficients
+        nfock = self.qed.nboson_states[imode]
+        idx = sum(self.qed.nboson_states[:imode])
+        ph_ci = self.qed.boson_coeff[idx : idx + nfock, idx]
+
+        # Pre-compute displacement operator
+        tau = numpy.exp(self.qed.squeezed_var[imode])
+        fopt = self.qed.couplings_var[imode]
+
+        zalpha = tau * fopt * self.eta[imode]
+        zalpha /= self.qed.omega[imode]
+
+        # <m | D(z_alpha) |n>
+        disp_mat = numpy.zeros((self.nao, nfock, nfock))
+
+        # Off diagonal elements
+        ind_m, ind_n = numpy.tril_indices(nfock, k=-1)
+        for i_m, i_n in zip(ind_m, ind_n):
+            # Factorial ratio
+            ratio = factorial(i_n, exact=True) / factorial(i_m, exact=True)
+
+            # Matrix elements
+            disp_mat[:, i_m, i_n] += 2.0 * numpy.sqrt(ratio) * (-zalpha)**(i_m - i_n) \
+                        * genlaguerre(n=i_n, alpha=(i_m - i_n))(zalpha**2) \
+                        * ph_ci[i_m] * ph_ci[i_n]
+
+        # Compute diagonal elements
+        for i_m in range(nfock):
+            disp_mat[:, i_m, i_m] += genlaguerre(n=i_m, alpha=0)(zalpha**2) * ph_ci[i_m]**2
+
+        gaussian = numpy.exp(-0.5 * zalpha ** 2)
+        disp_gaussian = numpy.einsum("p, pmk-> pmk", gaussian, disp_mat, optimize=True)
+
+        # Trace photonic degrees of freedom
+        tmp = numpy.einsum("pmk-> p", disp_gaussian)
+        Umat_dipole = numpy.diag(tmp)
+
+        ###############
+
+        # TEST: Transformation matrix, dipole-to-AO basis
+        ao2dip_mat = self.ao2dipole[imode]
+
+        # Invert AO-to-dipole transformation matrix
+        dip2ao_mat = linalg.inv(self.ao2dipole[imode])
+
+        # TEST: Transformation matrix, AO basis
+        Umat_ao = dip2ao_mat @ Umat_dipole @ ao2dip_mat
+
+        # Transform entangled-MO coefficients to original MO basis
+        new_mo_coeff = numpy.einsum("pq, qi-> pi", Umat_ao.conj().T, self.mo_coeff, optimize=True)
+
+        return new_mo_coeff
+
+
     def scf(self, dm0=None, **kwargs):
 
         cput0 = (logger.process_clock(), logger.perf_counter())
@@ -1199,65 +1283,6 @@ class RHF(qedhf.RHF):
         self._finalize()
         return self.e_tot
     kernel = lib.alias(scf, alias_name='kernel')
-
-
-    def get_jk_chols(self, mol=None, dm=None, hermi=1, with_j=True, with_k=True, omega=None):
-        r"""get jk matrix in the in DO and with chols
-
-        .. math::
-
-            I_{ijkl} = I^e_{ijkl} + g_{ij}g_{kl}
-
-        where :math:`I^e` is the pure electronci two-body integral.
-        the latter term counts for the photon-mediated correlations
-
-        .. math::
-
-            J_{uv} &= \sum_{ls} D_{ls}(uv|ls) \\
-            K_{uv} &= \sum_{ls} D_{ls}(us|lv)
-
-        Hence, the photon-mediated part of JK is:
-
-        .. math::
-
-            J^p_{uv} &= \sum_{ls} D_{ls}(uv|ls) = \sum_{ls} D_{ls} g_{uv} g_{ls} \\
-            K^p_{uv} &= \sum_{ls} D_{ls} g_{us} g_{lv}
-
-        """
-        # Note the incore version, which initializes an _eri array in memory.
-        if mol is None:
-            mol = self.mol
-        if dm is None:
-            dm = self.make_rdm1()
-            dm = self.get_dm_do(dm, self.ao2dipole)
-
-        vj = vk = None
-
-        # replace the following with chols, without using eri_DO
-        fc_factor = self.FC_factor(self.eta, imode, onebody=False)
-        fc_factor *= (1.0 * self.eri_DO - 0.5 * self.eri_DO.transpose(0, 3, 2, 1))
-        # G_{pqrs} * [I_{pqrs} - 0.5 * I_{ps rq} ] * rho_{rs}
-        # = L_{\gamma, pq} L_{\gamma, rs} * \rho_{rs}
-        # - L_{\gamma, pq} L_{\gamma, rs} * \rho_{rq}
-
-        # vj = G_{pqrs} I_{pqrs} * \rho_{rs}
-        #    = G_{pqrs} L_{\gamma, pq} L_{\gamma, rs} * \rho_{rs}
-
-        # vk = G_{psrq} I_{psrq} * \rho_{rs}
-        #    = G_{psrq} L_{\gamma, ps} L_{\gamma, rq} * \rho_{rs}
-
-        # the above is the same as the following, using the following if we
-        # want to separate it into vj and vk
-
-        # add dressing factor to two-body integrals (todo)
-        for imode in range(self.qed.nmodes):
-            #U = self.ao2dipole[imode]
-            factor = self.FC_factor(self.eta, imode, onebody=False)
-            eri_tmp = self.eri_DO * factor
-            vj, vk = hf.dot_eri_dm(eri_tmp, dm, hermi, with_j, with_k)
-            del eri_tmp
-
-        return vj, vk
 
 
     # ===============================

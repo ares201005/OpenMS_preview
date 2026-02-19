@@ -74,7 +74,9 @@ from pyscf import lib
 from pyscf.lib import logger
 
 import openms
+from openms.mqed import qedhf
 from openms.mqed import scqedhf
+from openms.mqed import vtqedhf
 from openms import __config__
 import time
 
@@ -114,27 +116,38 @@ class RHF(scqedhf.RHF):
 
         super().__init__(mol, **kwargs)
 
-        # print headers
-        logger.info(self, openms.__logo__)
-
+        # Add paper references
         if "vtqedhf" not in openms.runtime_refs:
             openms.runtime_refs.append("vtqedhf")
+
+        # print headers
+        logger.info(self, openms.__logo__)
 
         self.vlf_grad = numpy.zeros(self.qed.nmodes)
         self.vsq_grad = numpy.zeros(self.qed.nmodes)
 
-        if "couplings_var" in kwargs:
-            self.qed.couplings_var = numpy.asarray(kwargs["couplings_var"])
-            self.qed.optimize_varf = False
-        else:
-            self.qed.optimize_varf = True
-            self.qed.couplings_var = 0.5 * numpy.ones(self.qed.nmodes)
-        if "squeezed_cs" in kwargs:
-            self.qed.squeezed_cs = kwargs["squeezed_cs"]
-
-        self.qed.update_couplings()
         self.vhf_dse = None
         self.grad_vhf_dse = None
+
+        # Default optimal transformation parameters
+        if type(self) is vtqedhf.RHF:
+            self.qed.couplings_var[self.qed.gfac > 0.0] = 0.5
+            self.qed.optimize_varf = True
+
+        # Check for guess parameters in keyword arguments
+        if "couplings_var" in kwargs: # optimal transformation
+            logger.warn(self, "User-provided 'couplings_var' values will overwrite default value.")
+            self.qed.couplings_var = numpy.asarray(kwargs["couplings_var"])
+            self.qed.optimize_varf = False
+
+        if "squeezed_cs" in kwargs: # squeezing
+            logger.warn(self, "User-provided 'squeezed_cs' values will overwrite default value.")
+            self.qed.squeezed_cs = numpy.asarray(kwargs["squeezed_cs"])
+
+        # Update QED coupling values
+        self.qed.update_couplings()
+
+        return
 
 
     def get_hcore(self, mol=None, dm=None, dress=True):
@@ -151,14 +164,14 @@ class RHF(scqedhf.RHF):
         return h1e
 
 
-    def get_veff(self, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
+    def get_veff(self, mol=None, dm=None):
         r"""VTQED Hartree-Fock potential matrix for the given density matrix
 
         .. math::
             V_{eff} = J - K/2 + \bra{i}\lambda\cdot\mu\ket{j}
 
         """
-        vhf = super().get_veff(mol, dm, dm_last, vhf_last, hermi)
+        vhf = super().get_veff(mol, dm)
 
         if self.qed.use_cs:
             self.qed.update_cs(dm)
@@ -252,7 +265,11 @@ class RHF(scqedhf.RHF):
         if self.qed.couplings_var[imode] < -0.05 or self.qed.couplings_var[imode] > 1.05:
             logger.warn(self, f"Warning: Couplings_var should be in [0,1], which is {self.qed.couplings_var[imode]}")
 
-        derivative /= self.qed.couplings_var[imode]
+        # Only divide by couplings_var when it is not zero
+        if self.qed.gfac[imode] > 0.0:
+            derivative /= self.qed.couplings_var[imode]
+        else:
+            derivative = numpy.zeros_like(derivative)
 
         if onebody:
             return derivative.reshape(self.nao, self.nao)
@@ -467,6 +484,39 @@ class RHF(scqedhf.RHF):
         if not self.qed.optimize_varf:
             return
 
+
+    def grad_var_params(self, dm_do, g_DO, dm=None):
+        r"""Compute dE/df where f is the variational transformation parameters.
+
+        :math:`\eta` here is the eigenvalue of :math:`\lambda \sqrt{\omega_\alpha/2} (\boldsymbol{d}\cdot \boldsymbol{e}_\alpha)`,
+        not just the eigenvalue of :math:`\boldsymbol{d}\cdot \boldsymbol{e}_\alpha`.
+
+        Define :math:`\eta_p` as eigenvalue of :math:`\boldsymbol{d}\cdot \boldsymbol{e}_\alpha'
+        and :math:`\tilde{\eta}_p` as eigenvalue of :math:`\lambda \sqrt{\omega_\alpha/2} (\boldsymbol{d}\cdot \boldsymbol{e}_\alpha)`,
+        then:
+
+        .. math::
+
+            \tilde{\eta}_p = \eta_p  \sqrt{\omega_\alpha/2}.
+
+        And the Gaussian factor is:
+
+        .. math::
+
+            \exp(-\lambda^2(\eta_p - \eta_q)^2/4\omega) =
+            \exp[ -1/(2\omega^2_\alpha) (\tilde{\eta}_p - \tilde{\eta}_q)^2 ].
+
+        """
+
+        # gradient w.r.t eta
+        self.get_eta_gradient(dm_do, g_DO, dm)
+
+        if self.qed.optimize_vsq:
+            self.get_vsq_gradient(dm_do, g_DO, dm)
+
+        if not self.qed.optimize_varf:
+            return
+
         # gradient w.r.t f_\alpha
         nmodes = self.qed.nmodes
         onebody_dvlf = numpy.zeros(nmodes)
@@ -479,7 +529,8 @@ class RHF(scqedhf.RHF):
                 g2_dot_D = 2.0 * numpy.einsum("pp, p->", dm_do[a], g_DO[a]**2)
                 onebody_dvlf[a] += g2_dot_D / self.qed.omega[a] / self.qed.couplings_var[a]
 
-            # one-electron part
+
+            # One-electron part
             derivative = self.gaussian_derivative_f_vector(self.eta, a)
 
             h_dot_g = self.h1e_DO * derivative  # element_wise
@@ -489,11 +540,20 @@ class RHF(scqedhf.RHF):
             tmp -= numpy.einsum(
                 "pq, pq, p, q->", dm_do[a], dm_do[a], g_DO[a], g_DO[a]
             )
-            oei_derivative += tmp / self.qed.omega[a] / self.qed.couplings_var[a]
 
+            tmp /= self.qed.omega[a]
+
+            # Only divide by couplings_var when it is not zero
+            if self.qed.gfac[a] > 0.0:
+                tmp /= self.qed.couplings_var[a]
+            else:
+                tmp = numpy.zeros_like(tmp)
+
+            oei_derivative += tmp
             onebody_dvlf[a] += oei_derivative
 
-            # two-electron part
+
+            # Two-electron part
             if self.ltensor is not None:
                 for p in range(self.nao):
                     for q in range(self.nao):

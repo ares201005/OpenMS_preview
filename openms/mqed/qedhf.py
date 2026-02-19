@@ -505,6 +505,7 @@ class RHF(hf.RHF):
 
         self.bare_h1e = self.get_bare_hcore(mol)
 
+        # Since we have bare_hcore, require dm for this method?
         if dm is None:
             return self.bare_h1e
         else:

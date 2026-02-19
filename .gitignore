@@ -102,6 +102,7 @@ source.dat
 
 # Calculation examples
 *.molden
+*.cube
 
 # Installer logs
 pip-log.txt
