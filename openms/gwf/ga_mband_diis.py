@@ -1,14 +1,28 @@
 import numpy as np
 import scipy.linalg
+from pyscf import lib
 from sys import argv
 
-from pdb import set_trace as st
+class GenericDIIS(lib.diis.DIIS):
+    def __init__(self, space=8, rollback=0, filename=None):
+        super().__init__(filename=filename)
+        self.space = space
+        self.rollback = rollback
+
+    def update(self, var, var_grad):
+        errvec = var_grad
+        lib.logger.debug1(self, 'diis-norm(errvec)=%g', np.linalg.norm(errvec))
+        params = var
+        xnew = lib.diis.DIIS.update(self, params, xerr=errvec)
+        if self.rollback > 0 and len(self._bookkeep) == self.space:
+            self._bookkeep = self._bookkeep[-self.rollback:]
+        return xnew
 
 # matrix indices are given by (I, alpha) where I denotes the site, alpha the local state
 # The ordering of matrix indices is given by (0,1), ... , (0, M), (1,0), ..., (1,M), ..., (N,M)
 
-class GASCF:
-    def __init__(self, h1e, eri, N, Ne):
+class FermionGASCF(lib.StreamObject):
+    def __init__(self, h1e, U, N, Ne):
         # sanity check inputs
         if (Ne > h1e.shape[0]):
             raise ValueError
@@ -19,12 +33,6 @@ class GASCF:
         if (len(h1e_shape) != 2):
             raise ValueError
         if (h1e_shape[0] != h1e_shape[1]):
-            raise ValueError
-        
-        eri_shape = eri.shape
-        if (len(eri_shape) != 4):
-            raise ValueError
-        if (not (eri_shape[0] == eri_shape[1] == eri_shape[2] == eri_shape[3] == h1e_shape[0])):
             raise ValueError
         
         if ((h1e_shape[0] % N) != 0):
@@ -47,11 +55,14 @@ class GASCF:
                 self.t[I, J] = t[slice(I*M, (I+1)*M), slice(J*M, (J+1)*M)]
 
         # extract 2-electron coefficients
-        U = np.zeros((N, M, M, M, M))
         for I in range(N):
-            idx = slice(I*M, (I+1)*M)
-            U[I] = eri[idx, idx, idx, idx]
-            self.U = U
+            U_shape = U[I].shape
+            if (len(U_shape) != 4):
+                raise ValueError
+            if (not(U_shape[0] == U_shape[1] == U_shape[2] == U_shape[3])): # add check for equaling site dependent M
+                raise ValueError
+        self.U = U
+
 
     def _get_ht(self, I):
         return self.h[I]
@@ -70,18 +81,18 @@ class GASCF:
                     C[i, state & ~(1 << i), state] = (-1)**(bin(state >> (i+1)).count('1'))
         return C           
     
-    # phi is a vector of size N, containing embedding matrix states each of size 2**M x 2**M encoded as a 4**M component vector
+    # psiarr is a vector of size N, containing embedding matrix states each of size 2**M x 2**M encoded as a 4**M component vector
     # L is a vector of size N, containing matrices of size MxM
     # Lc is a vector of size N, containing matrices of size MxM
     # Delta is a vector of size N, containing Hermitian matrices of size MxM
     # Ec is a vector of size N containing real scalar energies
-    def _pack_vector(self, phiarr, L, Lc, Delta, Ec):
+    def _pack_vector(self, psiarr, L, Lc, Delta, Ec):
         parts = []
         N = self.N
         M = self.M
         for i in range(N):
-            parts.append(phiarr[i].real.ravel())
-            parts.append(phiarr[i].imag.ravel())
+            parts.append(psiarr[i].real.ravel())
+            parts.append(psiarr[i].imag.ravel())
         for i in range(N):
             parts.append(L[i].real.ravel())
             parts.append(L[i].imag.ravel())
@@ -93,7 +104,7 @@ class GASCF:
             parts.append(Delta[i].imag.ravel())
         parts.append(np.asarray(Ec).ravel())
 
-        # assert all(phiarr[i].size == 4**M for i in range(N))
+        # assert all(psiarr[i].size == 4**M for i in range(N))
         # assert all(L[i].size == M*M for i in range(N))
         # assert all(Lc[i].size == M*M for i in range(N))
         # assert all(Delta[i].size == M*M for i in range(N))
@@ -107,14 +118,14 @@ class GASCF:
         idx = 0
         N, M = self.N, self.M
 
-        phiarr = []
-        size_phi = 4**M
+        psiarr = []
+        size_psi = 4**M
         for _ in range(N):
-            Re = x[idx:(idx + size_phi)].reshape(size_phi)
-            idx += size_phi
-            Im = x[idx:(idx + size_phi)].reshape(size_phi)
-            idx += size_phi
-            phiarr.append(Re + 1j*Im)
+            Re = x[idx:(idx + size_psi)].reshape(size_psi)
+            idx += size_psi
+            Im = x[idx:(idx + size_psi)].reshape(size_psi)
+            idx += size_psi
+            psiarr.append(Re + 1j*Im)
 
         L = []
         size_sq = M*M
@@ -144,37 +155,37 @@ class GASCF:
         idx += N
 
         assert idx == len(x), "Unpack error: leftover elements in input array"
-        return phiarr, L, Lc, Delta, Ec
+        return psiarr, L, Lc, Delta, Ec
     
-    def get_phi_matrix(self, phi):
-        phi_size = int(np.sqrt(phi.shape)[0])
-        matrix = np.zeros((phi_size, phi_size), dtype=phi.dtype)
-        for Gamma in range(phi_size):
-            for n in range(phi_size):
-                matrix[Gamma, n] = phi[Gamma*(phi_size) + n]
+    def get_psi_matrix(self, psi):
+        psi_size = int(np.sqrt(psi.shape)[0])
+        matrix = np.zeros((psi_size, psi_size), dtype=psi.dtype)
+        for Gamma in range(psi_size):
+            for n in range(psi_size):
+                matrix[Gamma, n] = psi[Gamma*(psi_size) + n]
         return matrix
 
-    def _compute_renormalizations(self, phiarr, Delta):
+    def _compute_renormalizations(self, psiarr, Delta):
         R = []
         for I in range(self.N):
             # get local state and correlation
             M = self.M
             C = self._get_annahilation_operators(M)
             B = scipy.linalg.sqrtm(np.linalg.inv(Delta[I] @ (np.eye(M) - Delta[I])))
-            phi = phiarr[I]
+            psi = psiarr[I]
 
             # compute R
             opmat = np.zeros((M, M), dtype=np.complex128)
             for alpha in range(M):
                 for b in range(M):
-                    opmat[alpha, b] = phi.conj().T @ (np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[b].T)) @ phi
+                    opmat[alpha, b] = psi.conj().T @ (np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[b].T)) @ psi
             R.append(opmat @ B)
 
         return R
     
-    def _compute_Hqp(self, phiarr, Delta, L):
+    def _compute_Hqp(self, psiarr, Delta, L):
         N, M = self.N, self.M
-        R = self._compute_renormalizations(phiarr, Delta)
+        R = self._compute_renormalizations(psiarr, Delta)
 
         teff = np.zeros((N*M, N*M), dtype=np.complex128)
         for I in range (N):
@@ -232,21 +243,21 @@ class GASCF:
 
     def _compute_lagrangian(self, x):
         N = self.N
-        phiarr, L, Lc, Delta, Ec = self._unpack_vector(x)
+        psiarr, L, Lc, Delta, Ec = self._unpack_vector(x)
         Lag = 0
         
         # calculate Hqp and energies of filled eigenstates
-        Hqp = self._compute_Hqp(phiarr, Delta, L)
-        mo_energy, mo_coeff = np.linalg.eigh(Hqp)
-        Lag += sum(mo_energy[i] for i in range(self.Ne))
+        Hqp = self._compute_Hqp(psiarr, Delta, L)
+        qp_energy, qp_coeff = np.linalg.eigh(Hqp)
+        Lag += sum(qp_energy[i] for i in range(self.Ne))
 
         # get embedding Hamiltonian expectations and normalization terms
         for I in range(N):
             Hemb = self._compute_Hemb(I, Lc)
-            phi = phiarr[I]
-            Lag += phi.T.conj() @ Hemb @ phi
+            psi = psiarr[I]
+            Lag += psi.T.conj() @ Hemb @ psi
             # calculate Ec contribution
-            Lag += Ec[I] * (1 - (phi.T.conj() @ phi))
+            Lag += Ec[I] * (1 - (psi.T.conj() @ psi))
 
         #  calculate Lmix
         Lmix = -sum(np.trace((L[I] + Lc[I]) @ Delta[I].T) for I in range(N))
@@ -256,22 +267,22 @@ class GASCF:
 
     def _compute_gradient(self, x):
         N = self.N
-        phiarr, L, Lc, Delta, Ec = self._unpack_vector(x)
+        psiarr, L, Lc, Delta, Ec = self._unpack_vector(x)
 
         # get energy gradients
-        grad_Ec = [1 - (phiarr[I].T.conj() @ phiarr[I]) for I in range(N)]
+        grad_Ec = [1 - (psiarr[I].T.conj() @ psiarr[I]) for I in range(N)]
 
         # get quasiparticle and embedding Hamiltonians
-        Hqp = self._compute_Hqp(phiarr, Delta, L)
-        mo_energy, mo_coeff = np.linalg.eigh(Hqp)
+        Hqp = self._compute_Hqp(psiarr, Delta, L)
+        qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         Hemb = [self._compute_Hemb(I, Lc) for I in range(N)]
-        R = self._compute_renormalizations(phiarr, Delta)
+        R = self._compute_renormalizations(psiarr, Delta)
 
         occ = [(i < self.Ne) for i in range(N*self.M)]
-        full_correlation = mo_coeff[:, occ].conj() @ mo_coeff[:, occ].T
+        full_correlation = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
 
-        # get |phi_I> gradients, each of size 4**M
-        grad_phiarr = []
+        # get <psi_K| gradients, each of size 4**M
+        grad_psiarr = []
         for K in range(N):
             M = self.M
             C = self._get_annahilation_operators(M)
@@ -288,7 +299,7 @@ class GASCF:
                 HDqp += sum((M1[alpha, gamma] * np.kron(C[alpha], np.eye(2**M)) @ np.kron(np.eye(2**M), C[gamma])) for alpha in range(M) for gamma in range(M))
             HD += HDqp + HDqp.conj().T
 
-            grad_phiarr.append(HD @ phiarr[K])
+            grad_psiarr.append(HD @ psiarr[K])
 
         # get lambda gradients
         grad_L = []
@@ -299,7 +310,7 @@ class GASCF:
                 for b in range(M):
                     DH = np.zeros(Hqp.shape)
                     DH[I*M + a, I*M + b] = 1
-                    Lm[a, b] = self._compute_derivative_energy(mo_coeff, DH)
+                    Lm[a, b] = self._compute_derivative_energy(qp_coeff, DH)
             grad_L.append(Lm - Delta[I])
 
         grad_Lc = []
@@ -309,7 +320,7 @@ class GASCF:
             C = self._get_annahilation_operators(M)
             for a in range(M):
                 for b in range(M):
-                    Lm[a,b] = phiarr[I].conj().T @ np.kron(np.eye(2**M), C[b].T @ C[a]) @ phiarr[I]
+                    Lm[a,b] = psiarr[I].conj().T @ np.kron(np.eye(2**M), C[b].T @ C[a]) @ psiarr[I]
             grad_Lc.append(Lm - Delta[I])
 
         # get Delta gradients
@@ -325,7 +336,7 @@ class GASCF:
             C = self._get_annahilation_operators(M)
             for alpha in range(M):
                 for gamma in range(M):
-                    P[alpha, gamma] = phiarr[K].conj().T @ np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[gamma].T) @ phiarr[K]
+                    P[alpha, gamma] = psiarr[K].conj().T @ np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[gamma].T) @ psiarr[K]
             
             A = scipy.linalg.sqrtm(Delta[K] @  (np.eye(M) - Delta[K]))
             B = np.linalg.inv(A)
@@ -347,53 +358,151 @@ class GASCF:
                             for b in range(M):
                                 DH[K*M + a, I*M + b] += M1[a,b]
                     # calculate contribution to the full derivative
-                    Dm[y, z] += self._compute_derivative_energy(mo_coeff, DH)
+                    Dm[y, z] += self._compute_derivative_energy(qp_coeff, DH)
 
             grad_Delta.append(Dm)
 
         # return packed vector wrt x and y derivatives
         f = lambda grad: [2*G.conj() for G in grad]
         g = lambda grad: [2*G for G in grad]
-        return self._pack_vector(g(grad_phiarr), f(grad_L), f(grad_Lc), f(grad_Delta), grad_Ec)
-
-    def kernel(self, method="krylov", maxiter=None, tolerance=1e-6, verbose=True):
-        N = self.N
-
-        # initialize all phi to uniformly id on each block (unentangled)
+        return self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), f(grad_Delta), grad_Ec)
+    
+    def _get_initial_guess(self):
+        # initialize all psi to uniformly id on each block (unentangled)
         # L and Lc to 0 and Delta uniform identity on all sites
         # Ec to 0
-        phiarr = []
+        N = self.N
+        psiarr = []
         L = []
         Lc = []
         Delta = []
         for I in range(N):
             M = self.M
-            phi = np.zeros(4**M, dtype=np.complex128)
+            psi = np.zeros(4**M, dtype=np.complex128)
             for Gamma in range(2**M):
-                phi[Gamma*(2**M) + Gamma] = 1
-            phiarr.append(phi)
+                psi[Gamma*(2**M) + Gamma] = 1
+            psiarr.append(psi)
 
-            ZM = np.zeros((M,M), dtype=np.complex128)
+            ZM = np.eye(M, dtype=np.complex128)
             L.append(ZM.copy())
             Lc.append(ZM.copy())
             Delta.append((self.Ne/(N*M))*np.eye(M))
         Ec = np.zeros(N)
-        x0 = self._pack_vector(phiarr, L, Lc, Delta, Ec)
+        return self._pack_vector(psiarr, L, Lc, Delta, Ec)
+
+    # def project(self, x):
+    #     psiarr, L, Lc, Delta, Ec = self._unpack_vector(x)
+    #     for I in range(self.N):
+    #         Delta[I] = 0.5*(Delta[I] + Delta[I].T.conj())
+    #         L[I] = 0.5*(L[I] + L[I].T.conj())
+    #         Lc[I] = 0.5*(Lc[I] + Lc[I].T.conj())
+    #         psiarr[I] = psiarr[I] / np.linalg.norm(psiarr[I])
+    #     return self._pack_vector(psiarr, L, Lc, Delta, Ec)
+
+    def _project(self, x):
+        return x
+
+    def _do_simple_diis(self, x0, tolerance, verbose, diis_space=8, maxiter=200):
+        diis = GenericDIIS(space=diis_space, rollback=0)
+        x = x0
+        max_iter=200
+        for it in range(1, max_iter+1):
+            g = self._compute_gradient(x)
+            gnorm = np.linalg.norm(g)
+            if verbose:
+                print(f"iter {it}, norm = {gnorm}")
+
+            # break if converged
+            if (gnorm < tolerance):
+                return x, {"converged":True, "niter":it, "gnorm":gnorm}
+            # else perform update and try again
+            x = self._project(diis.update(x, g))
+            
+        return x, {"converged": False, "niter": max_iter, "gnorm": float(np.linalg.norm(self._compute_gradient(x)))}
+
+    def _do_fallback_diis(self, x0, tolerance, verbose, diis_space=8, diis_start=0, maxiter=200, alpha=0.05, beta=0.2):
+        diis = GenericDIIS(space=diis_space, rollback=0)
+        
+        x = self._project(x0)
+
+        for it in range(1, maxiter+1):
+            g = self._compute_gradient(x)
+            gnorm = np.linalg.norm(g)
+            if verbose:
+                print(f"iter {it}, ||g|| = {gnorm:.6e}")
+            if  (gnorm < tolerance):
+                return x, {"converged":True, "niter":it, "gnorm":gnorm}
+            
+            x_out = self._project(x - alpha*g)
+            err = x_out - x
+
+            if (it >= diis_start):
+                x_diis = diis.update(x_out, err)
+                x_try = x_diis
+                # x_try = self._project((1-beta)*x_out +  beta*x_diis)
+            else:
+                x_try = x_out
+            
+            # if g got worse, forget about it
+            gnorm_try = np.linalg.norm(self._compute_gradient((x_try)))
+            if (np.isfinite(gnorm_try) and (gnorm_try <= gnorm)):
+                x = x_try
+            else:
+                if verbose:
+                    print("reject step, fallback and reset")
+                x = x_out
+                beta = 0.5*beta
+                alpha = 0.5*alpha
+                diis = GenericDIIS(space=diis_space, rollback=0)
+
+        return x, {"converged":False, "niter":maxiter, "gnorm":gnorm}
+    
+    def _do_diis(self, x0, tolerance, verbose, diis_space=8, maxiter=200):
+        return self._do_simple_diis(x0, tolerance, verbose, diis_space=diis_space, maxiter=maxiter)
+        # return self._do_fallback_diis(x0, tolerance, verbose, diis_space=diis_space, maxiter=maxiter)
+
+    def kernel(self, method="krylov", maxiter=None, tolerance=1e-6, verbose=True):
+        print(f"kernel invoked: N={self.N}, M={self.M}, Ne={self.Ne}")
+        N = self.N
+
+        x0 = self._get_initial_guess()
 
         options = {}
-        if maxiter:
-            options['maxiter'] = maxiter
+        options['maxiter'] = 20
         if verbose:
             options['disp'] = True
 
         options['fatol'] = tolerance
         result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
+        
+        if (maxiter == None):
+            maxiter = 200
+        x, msg = self._do_diis(result.x, tolerance, verbose, diis_space=8, maxiter=maxiter)
 
-        phiarr, L, Lc, Delta, Ec = self._unpack_vector(result.x)
+        psiarr, L, Lc, Delta, Ec = self._unpack_vector(x)
+        projectors = []
+        for I in range(N):
+            M = self.M
+            K = scipy.linalg.logm((np.eye(M) - Delta[I]) @ np.linalg.inv(Delta[I]))
+            C = self._get_annahilation_operators(M)
+            rho = scipy.linalg.expm(sum(-K[a, b] * C[a].T @ C[b] for a in range(M) for b in range(M)))
+            rho = (1/np.trace(rho)) * rho
+            projectors.append(self.get_psi_matrix(psiarr[I]) @ scipy.linalg.sqrtm(rho))
+
+        psidelta = []
+        for I in range(N):
+            M = self.M
+            mat = np.zeros((M, M), dtype=np.complex128)
+            for a in range(M):
+                for b in range(M):
+                    mat[a, b] = psiarr[I].conj().T @ np.kron(np.eye(2**M), C[b].T) @  np.kron(np.eye(2**M), C[a]) @ psiarr[I]
+            psidelta.append(mat)
+
         print(f"Computed Ne = {sum(np.trace(Delta[I]) for I in range(N))}, self.Ne = {self.Ne}")
+        breakpoint()
 
-        print(result)
-        print(result.x)
+        print(msg)
+        print(x)
 
         self._post_kernel()
 
@@ -401,7 +510,7 @@ class GASCF:
         pass
 
 
-def get_ga_model(N=12, filling=0.5, U=2.0, t=-1.0, PBC=True):
+def get_ga_model(N=12, filling=0.5, U=1.0, t=-1.0, PBC=True):
     dim = N * 2
     Ne = int(N * filling)
 
@@ -417,11 +526,11 @@ def get_ga_model(N=12, filling=0.5, U=2.0, t=-1.0, PBC=True):
             h1e[a, (N-1)*2 + a] = t
 
     # 2-electron interactions
-    eri = np.zeros((dim, dim, dim, dim))
+    eri = np.zeros((N, 2, 2, 2, 2))
     for I in range(N):
-        eri[I*2, I*2+1, I*2, I*2+1] = -U
+        eri[I, 0, 1, 0, 1] = -U
 
-    return GASCF(h1e, eri, N, Ne)
+    return FermionGASCF(h1e, eri, N, Ne)
 
 if __name__ == '__main__':
     gamf = get_ga_model(PBC=False)
@@ -432,6 +541,10 @@ if __name__ == '__main__':
     elif (len(argv) == 3):
         gamf.kernel(method=argv[1], tolerance=float(argv[2]))
     elif (len(argv) == 4):
-        gamf.kernel(method=argv[1], tolerance=float(argv[2]), maxiter=int(argv[3]))
+        gamf = get_ga_model(N=int(argv[3]), PBC=False)
+        gamf.kernel(method=argv[1], tolerance=float(argv[2]))
+    elif (len(argv) == 5):
+        gamf = get_ga_model(N=int(argv[3]), PBC=False)
+        gamf.kernel(method=argv[1], tolerance=float(argv[2]), maxiter=int(argv[4]))
     else:
-        print(f"Usage: {argv[0]} [method] [tolerance] [maxiter]")
+        print(f"Usage: {argv[0]} [method] [tolerance] [nsites] [maxiter]")
