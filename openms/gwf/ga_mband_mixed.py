@@ -54,9 +54,9 @@ class FermionGASCF(ABC):
     # psiarr is a vector of size N, containing embedding matrix states each of size 2**M x 2**M encoded as a 4**M component vector
     # L is a vector of size N, containing matrices of size MxM
     # Lc is a vector of size N, containing matrices of size MxM
-    # Delta is a vector of size N, containing Hermitian matrices of size MxM
+    # n is a vector of size N, containing vectors of size M
     # Ec is a vector of size N containing real scalar energies
-    def _pack_vector(self, psiarr, L, Lc, Delta, Ec):
+    def _pack_vector(self, psiarr, L, Lc, n, Ec):
         parts = []
         N = self.N
         M = self.M
@@ -70,14 +70,13 @@ class FermionGASCF(ABC):
             parts.append(Lc[i].real.ravel())
             parts.append(Lc[i].imag.ravel())
         for i in range(N):
-            parts.append(Delta[i].real.ravel())
-            parts.append(Delta[i].imag.ravel())
+            parts.append(np.asarray(n[i]).ravel())
         parts.append(np.asarray(Ec).ravel())
 
         assert all(psiarr[i].size == 4**M for i in range(N))
         assert all(L[i].size == M**2 for i in range(N))
         assert all(Lc[i].size == M**2 for i in range(N))
-        assert all(Delta[i].size == M**2 for i in range(N))
+        assert all(len(n[i]) == M for i in range(N))
         assert np.asarray(Ec).ravel().size == N
 
         result = np.concatenate(parts)
@@ -113,19 +112,16 @@ class FermionGASCF(ABC):
             idx += size_sq
             Lc.append(Re + 1j*Im)
 
-        Delta = []
+        n = []
         for _ in range(N):
-            Re = x[idx:(idx + size_sq)].reshape(M, M)
-            idx += size_sq
-            Im = x[idx:(idx + size_sq)].reshape(M, M)
-            idx += size_sq
-            Delta.append(Re + 1j*Im)
+            n.append(x[idx:(idx + M)])
+            idx += M
 
         Ec = x[idx:(idx+N)]
         idx += N
 
         assert idx == len(x), "Unpack error: leftover elements in input array"
-        return psiarr, L, Lc, Delta, Ec
+        return psiarr, L, Lc, n, Ec
     
     def get_psi_matrix(self, psi):
         psi_size = int(np.sqrt(psi.shape)[0])
@@ -213,7 +209,10 @@ class FermionGASCF(ABC):
 
     def _compute_lagrangian(self, x):
         N = self.N
-        psiarr, L, Lc, Delta, Ec = self._unpack_vector(x)
+        psiarr, L, Lc, n, Ec = self._unpack_vector(x)
+        Delta = []
+        for K in range(N):
+            Delta.append(np.diag(n[K]))
         Lag = 0
         
         # calculate Hqp and energies of filled eigenstates
@@ -237,7 +236,10 @@ class FermionGASCF(ABC):
 
     def _compute_gradient(self, x):
         N = self.N
-        psiarr, L, Lc, Delta, Ec = self._unpack_vector(x)
+        psiarr, L, Lc, n, Ec = self._unpack_vector(x)
+        Delta = []
+        for K in range(N):
+            Delta.append(np.diag(n[K]))
 
         # get energy gradients
         grad_Ec = [1 - (psiarr[I].T.conj() @ psiarr[I]) for I in range(N)]
@@ -250,6 +252,11 @@ class FermionGASCF(ABC):
 
         occ = [(i < self.Ne) for i in range(N*self.M)]
         full_correlation = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
+        corr = np.empty((N, N), dtype=object)
+        for I in range(N):
+            for J in range(N):
+                M = self.M
+                corr[I, J] = full_correlation[I*M:(I+1)*M, J*M:(J+1)*M]
 
         # get <psi_K| gradients, each of size 4**M
         grad_psiarr = []
@@ -293,76 +300,44 @@ class FermionGASCF(ABC):
                     Lm[a,b] = psiarr[I].conj().T @ np.kron(np.eye(2**M), C[b].T @ C[a]) @ psiarr[I]
             grad_Lc.append(Lm - Delta[I])
 
-        # get Delta gradients
-        grad_Delta = []
+        # get n gradients
+        grad_n = []
         for K in range(N):
-            M = self.M
-
-            # get Lmix contribution
-            Dm = -L[K] - Lc[K]
-
-            # calculate renormalization based matrix
-            P = np.zeros((M,M), dtype=np.complex128)
-            C = self._get_annahilation_operators(M)
-            for alpha in range(M):
-                for gamma in range(M):
-                    P[alpha, gamma] = psiarr[K].conj().T @ np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[gamma].T) @ psiarr[K]
-            
-            A = scipy.linalg.sqrtm(Delta[K] @  (np.eye(M) - Delta[K]))
-            B = np.linalg.inv(A)
-
-            # calculate Hqp contribution element by element
-            for y in range(M):
-                for z in range(M):
-                    # calculate helper matrices for Hqp contribution
-                    E = np.zeros((M, M))
-                    E[y, z] = 1
-                    H = (E @ (np.eye(M) - Delta[K])) - (Delta[K] @ E)
-                    Z = scipy.linalg.solve_continuous_lyapunov(A, H)
-                    Y = -B @ Z @ B
-                    # calculate $\frac{\partial{H_{qp}}}{\partial{\Delta^K_{yz}}}$
-                    DH = np.zeros(Hqp.shape, dtype=np.complex128)
-                    for I in range(N):
-                        M1 = Y.T @ P.T @ self._get_tt(K, I) @ R[I].conj()
-                        for a in range(M):
-                            for b in range(M):
-                                DH[K*M + a, I*M + b] += M1[a,b]
-                    # calculate contribution to the full derivative
-                    Dm[y, z] += self._compute_derivative_energy(qp_coeff, DH)
-
-            grad_Delta.append(Dm)
+            nK = n[K]
+            r = 0.5 * R[K] @ np.diag(1/(1-nK) - 1/nK)
+            M1 = sum((r.conj().T @ self._get_tt(I, K).T @ R[I] @ corr[I, K]) for I in range(N))
+            M1 -= L[K] + Lc[K]
+            grad_n.append(2*np.diag(M1).real)
 
         # return packed vector wrt x and y derivatives
         f = lambda grad: [2*G.conj() for G in grad]
         g = lambda grad: [2*G for G in grad]
-        return self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), f(grad_Delta), grad_Ec)
+        return self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), grad_n, grad_Ec)
 
-    def kernel(self, method="krylov", x0=None, maxiter=None, tolerance=1e-6, verbose=True):
-        if verbose:
-            print(f"kernel invoked: N={self.N}, M={self.M}, Ne={self.Ne}")
+    def kernel(self, method="krylov", maxiter=None, tolerance=1e-6, verbose=True):
+        print(f"kernel invoked: N={self.N}, M={self.M}, Ne={self.Ne}")
         N = self.N
 
-        if (x0 == None):
-            # initialize all psi to uniformly id on each block (unentangled)
-            # L and Lc to 0 and Delta uniform identity on all sites
-            # Ec to 0
-            psiarr = []
-            L = []
-            Lc = []
-            Delta = []
-            for I in range(N):
-                M = self.M
-                psi = np.zeros(4**M, dtype=np.complex128)
-                for Gamma in range(2**M):
-                    psi[Gamma*(2**M) + Gamma] = 1 #2**(-float(M))
-                psiarr.append(psi)
+        # initialize all psi to uniformly id on each block (unentangled)
+        # L and Lc to 0 and Delta uniform identity on all sites
+        # Ec to 0
+        psiarr = []
+        L = []
+        Lc = []
+        n = []
+        for I in range(N):
+            M = self.M
+            psi = np.zeros(4**M, dtype=np.complex128)
+            for Gamma in range(2**M):
+                psi[Gamma*(2**M) + Gamma] = 1
+            psiarr.append(psi)
 
-                ZM = np.eye(M, dtype=np.complex128)
-                L.append(ZM.copy())
-                Lc.append(ZM.copy())
-                Delta.append((self.Ne/(N*M))*np.eye(M))
-            Ec = np.zeros(N)
-            x0 = self._pack_vector(psiarr, L, Lc, Delta, Ec)
+            ZM = np.eye(M, dtype=np.complex128)
+            L.append(ZM.copy())
+            Lc.append(ZM.copy())
+            n.append([self.Ne/(N*M)]*M)
+        Ec = np.zeros(N)
+        x0 = self._pack_vector(psiarr, L, Lc, n, Ec)
 
         options = {}
         if maxiter:
@@ -373,9 +348,8 @@ class FermionGASCF(ABC):
         options['fatol'] = tolerance
         result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
 
-        psiarr, L, Lc, Delta, Ec = self._unpack_vector(result.x)
-        E = self._compute_lagrangian(result.x)
-        result.pop("x")
+        psiarr, L, Lc, n, Ec = self._unpack_vector(result.x)
+        Delta = [np.diag(n[K]) for K in range(N)]
         projectors = []
         for I in range(N):
             M = self.M
@@ -384,14 +358,15 @@ class FermionGASCF(ABC):
             rho = scipy.linalg.expm(sum(-K[a, b] * C[a].T @ C[b] for a in range(M) for b in range(M)))
             rho = (1/np.trace(rho)) * rho
             projectors.append(self.get_psi_matrix(psiarr[I]) @ scipy.linalg.sqrtm(rho))
-            
-        return {
-            "result":result,
-            "E": E,
-            "psiarr":[self.get_psi_matrix(psiarr[I]) for I in range(N)],
-            "L":L,
-            "Lc":Lc,
-            "Delta":Delta,
-            "Ec":Ec,
-            "projectors":projectors
-        }
+
+        psidelta = []
+        for I in range(N):
+            M = self.M
+            mat = np.zeros((M, M), dtype=np.complex128)
+            for a in range(M):
+                for b in range(M):
+                    mat[a, b] = psiarr[I].conj().T @ np.kron(np.eye(2**M), C[b].T) @  np.kron(np.eye(2**M), C[a]) @ psiarr[I]
+            psidelta.append(mat)
+
+        result.pop("x")
+        return {"result":result, "psiarr":psiarr, "L":L, "Lc":Lc, "Delta":Delta, "Ec":Ec, "projectors":projectors}
