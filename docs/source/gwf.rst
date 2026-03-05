@@ -65,6 +65,12 @@ Single-band Gutzwiller method
 Multi-band Gutzwiller method for local correlation
 ==================================================
 
+.. automodule:: openms.gwf.ga_mband_diis
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+
 .. automodule:: openms.gwf.ga_local
    :members:
    :undoc-members:
