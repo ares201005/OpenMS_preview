@@ -3,6 +3,8 @@ import scipy.linalg
 from pyscf import lib
 from sys import argv
 
+
+
 class GenericDIIS(lib.diis.DIIS):
     def __init__(self, space=8, rollback=0, filename=None):
         super().__init__(filename=filename)
@@ -166,6 +168,7 @@ class FermionGASCF(lib.StreamObject):
         return matrix
 
     def _compute_renormalizations(self, psiarr, Delta):
+        # make R as a vector
         R = []
         for I in range(self.N):
             # get local state and correlation
@@ -182,12 +185,26 @@ class FermionGASCF(lib.StreamObject):
             R.append(opmat @ B)
 
         return R
-    
-    def _compute_Hqp(self, psiarr, Delta, L):
+
+    def _compute_Hqp(self, psiarr,
+                    Delta, # local correlaiton on each site
+                    L, # lambda variable
+        ):
+        r"""Compute the quasiparticle Hamiltonain
+
+        .. math::
+            \hat{H}_{qp} = & \sum_{IJ ab} \left[ \sum_{\alpha\beta}\tilde{t}^{IJ}_{\alpha\beta} \mathcal{R}^{I}_{\alpha a} \mathcal{R}^{J*}_{\beta b} \right] c^\dag_{Ia}c_{Jb} \\
+                           &+\sum_{I ab} \left[ \lambda^I_{ab}c_{Ia}^\dag c_{Ib} + h.c.  \right]
+
+        """
+        #YZ: change this to vectorized code
+        #    M should be a list of length N
         N, M = self.N, self.M
+
         R = self._compute_renormalizations(psiarr, Delta)
 
         teff = np.zeros((N*M, N*M), dtype=np.complex128)
+
         for I in range (N):
             for J in range(N):
                 teff_IJ = R[I].T @ self._get_tt(I, J) @ R[J].conj()
@@ -199,12 +216,13 @@ class FermionGASCF(lib.StreamObject):
         for I in range(N):
             for a in range(M):
                 for b in range(M):
-                   lqp[I*M + a, I*M + b] = L[I][a, b] 
+                   lqp[I*M + a, I*M + b] = L[I][a, b]
         Hqp += lqp + lqp.T.conj()
 
         return Hqp
-    
+
     def _compute_Hemb(self, I, Lc):
+        # YZ: looks problematic (bath part)
         M = self.M
         # get coefficients for embedding Hamiltonian
         h = self._get_ht(I)
@@ -288,7 +306,7 @@ class FermionGASCF(lib.StreamObject):
             C = self._get_annahilation_operators(M)
             A = scipy.linalg.sqrtm(Delta[K] @  (np.eye(M) - Delta[K]))
             B = np.linalg.inv(A)
-            
+
             # construct derivative Hamiltonian
             HD = Hemb[K] - Ec[K]*np.eye(4**M)
             HDqp = np.zeros((4**M, 4**M), dtype=np.complex128)
@@ -323,6 +341,8 @@ class FermionGASCF(lib.StreamObject):
                     Lm[a,b] = psiarr[I].conj().T @ np.kron(np.eye(2**M), C[b].T @ C[a]) @ psiarr[I]
             grad_Lc.append(Lm - Delta[I])
 
+        # YZ: looks problematic, need to double check it!!!
+        # lambda should be determined by the GWF constraints
         # get Delta gradients
         grad_Delta = []
         for K in range(N):
@@ -337,7 +357,7 @@ class FermionGASCF(lib.StreamObject):
             for alpha in range(M):
                 for gamma in range(M):
                     P[alpha, gamma] = psiarr[K].conj().T @ np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[gamma].T) @ psiarr[K]
-            
+
             A = scipy.linalg.sqrtm(Delta[K] @  (np.eye(M) - Delta[K]))
             B = np.linalg.inv(A)
 
