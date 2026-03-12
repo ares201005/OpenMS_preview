@@ -36,7 +36,9 @@ curr*
 # output files
 *.chk
 
-tests/
+# test files
+*.csv
+#tests/
 *deprecate*/
 
 

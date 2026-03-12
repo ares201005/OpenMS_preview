@@ -74,7 +74,7 @@ where :math:`\Delta_j` and :math:`\Gamma_j` are random variables.
 from openms import models
 
 from openms.models import hh_model
-from openms.models import hubbard
+from openms.models import hubbard_1d
 from openms.models import aggregates  # disordered molecular aggregates
 
 from .shin_metiu import Shin_Metiu

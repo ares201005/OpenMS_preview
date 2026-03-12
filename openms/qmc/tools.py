@@ -1,4 +1,3 @@
-
 from functools import reduce
 from openms.__mpi__ import MPI
 from openms.lib.misc import deprecated
@@ -10,6 +9,7 @@ import time
 # ----------------------------------------
 # block sparsity - low rank scheme
 # ----------------------------------------
+
 
 def get_blksize(ltensor, threshold):
 
@@ -23,11 +23,11 @@ def get_blksize(ltensor, threshold):
 
 
 def build_Ltensor_plan(
-    rltensor,            # (Ngamma, N, N)
-    blksize,             # global half-bandwidth
+    rltensor,  # (Ngamma, N, N)
+    blksize,  # global half-bandwidth
     backend=None,
-    rank_tol=1e-10,      # numerical rank tolerance for svals
-    max_rank_fraction=0.1  # low-rank cutoff: rank <= N*0.1 -> low-rank route
+    rank_tol=1e-10,  # numerical rank tolerance for svals
+    max_rank_fraction=0.1,  # low-rank cutoff: rank <= N*0.1 -> low-rank route
 ):
     """
     Precompute a per-gamma plan:
@@ -44,6 +44,7 @@ def build_Ltensor_plan(
     """
     if backend is None:
         import numpy as np
+
         backend = np
 
     Ngamma, N, N2 = rltensor.shape
@@ -69,10 +70,10 @@ def build_Ltensor_plan(
 
         if rank <= max_rank and rank > 0:
             k = max(1, rank)
-            U_k  = U[:, :k]           # (N,k)
-            s_k  = s[:k]              # (k,)
-            Vh_k = Vh[:k, :]          # (k,N)
-            Uright = Vh_k.T           # (N,k)
+            U_k = U[:, :k]  # (N,k)
+            s_k = s[:k]  # (k,)
+            Vh_k = Vh[:k, :]  # (k,N)
+            Uright = Vh_k.T  # (N,k)
             # X = U_k * diag(s_k): scale columns of U_k by s_k
             X = U_k * s_k[backend.newaxis, :]
             plan.append({"type": "lowrank", "rank": int(k), "X": X, "Uright": Uright})
@@ -86,7 +87,7 @@ def build_Ltensor_plan(
     return plan, meta
 
 
-def cholesky2thc(ltensor, rank, thresh=1.e-6):
+def cholesky2thc(ltensor, rank, thresh=1.0e-6):
     r"""Using the nested SVD to factorize CD
 
     .. math::
@@ -170,12 +171,13 @@ def stochastic_thc(L, n_stoch, method="rademacher", seed=None, n_svd_keep=0):
         xi = rng.standard_normal((n_stoch, nchol)) / numpy.sqrt(n_stoch)
     elif method == "qr":
         xi = rng.standard_normal((n_stoch, nchol))
-        xi = xi / numpy.sqrt(n_stoch) # normalize
+        xi = xi / numpy.sqrt(n_stoch)  # normalize
         xi, _ = numpy.linalg.qr(xi.T)  # Orthonormalize columns
-        xi = xi.T #/ numpy.sqrt(n_stoch)
+        xi = xi.T  # / numpy.sqrt(n_stoch)
 
     elif method == "sobol":
         from scipy.stats.qmc import Sobol
+
         sampler = Sobol(d=nchol, scramble=True, seed=seed)
         xi = sampler.random(n_stoch)
         xi = (xi - 0.5) * 2 / numpy.sqrt(n_stoch)  # Shift to zero-mean
@@ -200,7 +202,7 @@ def stochastic_thc(L, n_stoch, method="rademacher", seed=None, n_svd_keep=0):
         raise ValueError(f"Unknown method: {method}")
 
     # === Standard THC via stochastic projection ===
-    X = numpy.einsum('Xpq, uX->upq', L, xi)
+    X = numpy.einsum("Xpq, uX->upq", L, xi)
     U = xi.T
     return X, U
 
@@ -244,7 +246,7 @@ def bilinear_decomposition(Afac, Bfac, chol_eb, decouple_scheme):
     assert nmodes == Afac.shape[0] == Bfac.shape[0]
     nao = chol_eb.shape[1]
 
-    thresh = 1.e-10
+    thresh = 1.0e-10
     Lga = chol_eb * Afac[:, backend.newaxis, backend.newaxis]
 
     if decouple_scheme == 1:
@@ -264,37 +266,37 @@ def bilinear_decomposition(Afac, Bfac, chol_eb, decouple_scheme):
         # factors = [backend.sqrt(backend.ones(nmodes) - decoup_Afac, dtype=complex), backend.sqrt(decoup_Afac)]
         # factors = [(1 + 1j) * Afac]
         # factors = [-1j*Afac, Afac]
-        chol_bilinear_e = backend.zeros((3*nmodes, nao, nao), dtype=complex)
-        chol_bilinear_b = backend.zeros(3*nmodes, dtype=complex)
+        chol_bilinear_e = backend.zeros((3 * nmodes, nao, nao), dtype=complex)
+        chol_bilinear_b = backend.zeros(3 * nmodes, dtype=complex)
         for imode in range(nmodes):
             if backend.linalg.norm(Lga[imode]) > 1.0e-10:
                 # term 1: A_\alpha \hat{F}_\alpha + B_\alpha \hat{B}_\alpha
                 # these operator corresponds to the same AF and same random number
-                chol_bilinear_e[imode*3] = Lga[imode]
-                chol_bilinear_b[imode*3] = Bfac[imode]
+                chol_bilinear_e[imode * 3] = Lga[imode]
+                chol_bilinear_b[imode * 3] = Bfac[imode]
 
                 # term 2: i A_\alpha \hat{F}_\alpha
-                chol_bilinear_e[imode*3 + 1] = 1j* Lga[imode]
+                chol_bilinear_e[imode * 3 + 1] = 1j * Lga[imode]
 
                 # term 3: i B_\alpha \hat{B}_\alpha
-                chol_bilinear_b[imode*3 + 2] = 1j * Bfac[imode]
+                chol_bilinear_b[imode * 3 + 2] = 1j * Bfac[imode]
 
     elif decouple_scheme == 2:
-        chol_bilinear_e = backend.zeros((2*nmodes, nao, nao), dtype=complex)
-        chol_bilinear_b = backend.zeros(2*nmodes, dtype=complex)
+        chol_bilinear_e = backend.zeros((2 * nmodes, nao, nao), dtype=complex)
+        chol_bilinear_b = backend.zeros(2 * nmodes, dtype=complex)
         for imode in range(nmodes):
             if backend.linalg.norm(Lga[imode]) > 1.0e-10:
                 # term 1: \frac{1}{\sqrt{2}} (A_\alpha \hat{F}_\alpha + B_\alpha \hat{B}_\alpha)
                 # these operator corresponds to the same AF and same random number
                 fac = 1.0 / numpy.sqrt(2.0)
-                chol_bilinear_e[imode*2] = Lga[imode] * fac
-                chol_bilinear_b[imode*2] = Bfac[imode] * fac
+                chol_bilinear_e[imode * 2] = Lga[imode] * fac
+                chol_bilinear_b[imode * 2] = Bfac[imode] * fac
 
                 # term 2: \frac{i}{\sqrt{2}} (A_\alpha \hat{F}_\alpha - B_\alpha \hat{B}_\alpha)
                 # these operator corresponds to the same AF and same random number
                 fac = 1j / numpy.sqrt(2.0)
-                chol_bilinear_e[imode*2+1] = Lga[imode] * fac
-                chol_bilinear_b[imode*2+1] = - fac * Bfac[imode]
+                chol_bilinear_e[imode * 2 + 1] = Lga[imode] * fac
+                chol_bilinear_b[imode * 2 + 1] = -fac * Bfac[imode]
     else:
         raise ValueError("Decouple scheme not fund!")
 
@@ -338,11 +340,13 @@ def _as_spin_tuple(x):
         return x[0], x[1]
     return x, x
 
+
 def _as_idx_tuple(idx):
     """Normalize indices into (idx_a, idx_b). If not tuple/list length 2, replicate."""
     if isinstance(idx, (tuple, list)) and len(idx) == 2:
         return backend.asarray(idx[0], dtype=int), backend.asarray(idx[1], dtype=int)
     return backend.asarray(idx, dtype=int), backend.asarray(idx, dtype=int)
+
 
 def chol_ao_to_orb_blocks(chol_ao, Xmat, C_left, C_right):
     """
@@ -357,13 +361,13 @@ def chol_ao_to_orb_blocks(chol_ao, Xmat, C_left, C_right):
 
 def get_h1e_chols_cas(
     mol,
-    C_ao,             # (nao,nmo) for RHF; (C_a, C_b) for UHF
-    core_idx,         # 1D for RHF; 1D or (core_a, core_b) for UHF
-    act_idx,          # 1D for RHF; 1D or (act_a, act_b) for UHF
+    C_ao,  # (nao,nmo) for RHF; (C_a, C_b) for UHF
+    core_idx,  # 1D for RHF; 1D or (core_a, core_b) for UHF
+    act_idx,  # 1D for RHF; 1D or (act_a, act_b) for UHF
     Xmat=None,
     thresh=1e-6,
     g=None,
-    block_decompose_eri=False
+    block_decompose_eri=False,
 ):
     r"""
     This function constructs the one-electron Hamiltonian in the active space and the
@@ -411,7 +415,7 @@ def get_h1e_chols_cas(
     # Normalize to spin form
     C_ao_a, C_ao_b = _as_spin_tuple(C_ao)
     core_a, core_b = _as_idx_tuple(core_idx)
-    act_a,  act_b  = _as_idx_tuple(act_idx)
+    act_a, act_b = _as_idx_tuple(act_idx)
 
     # Convert MO coeffs AO->OAO for each spin
     C_oao_a = Xinv.T @ C_ao_a
@@ -420,8 +424,8 @@ def get_h1e_chols_cas(
     # Active/core coefficient submatrices
     Ccore_a = C_oao_a[:, core_a] if core_a.size else C_oao_a[:, :0]
     Ccore_b = C_oao_b[:, core_b] if core_b.size else C_oao_b[:, :0]
-    Cact_a  = C_oao_a[:, act_a]  if act_a.size  else C_oao_a[:, :0]
-    Cact_b  = C_oao_b[:, act_b]  if act_b.size  else C_oao_b[:, :0]
+    Cact_a = C_oao_a[:, act_a] if act_a.size else C_oao_a[:, :0]
+    Cact_b = C_oao_b[:, act_b] if act_b.size else C_oao_b[:, :0]
 
     # 1) One-body in MO basis for each spin (same h_oao, different C)
     h_mo_a = C_oao_a.T @ h_oao @ C_oao_a
@@ -494,9 +498,13 @@ def get_h1e_chols_cas(
             dh_AA_a += L_AA_a * v_tot
             # Exchange part (same-spin only)
             if ncore_a:
-                L_Ai_a = chol_ao_to_orb_blocks(chol_ao, Xmat, Cact_a, Ccore_a)  # (nact_a,ncore_a)
-                L_iA_a = chol_ao_to_orb_blocks(chol_ao, Xmat, Ccore_a, Cact_a)  # (ncore_a,nact_a)
-                dh_AA_a -= (L_Ai_a @ L_iA_a)
+                L_Ai_a = chol_ao_to_orb_blocks(
+                    chol_ao, Xmat, Cact_a, Ccore_a
+                )  # (nact_a,ncore_a)
+                L_iA_a = chol_ao_to_orb_blocks(
+                    chol_ao, Xmat, Ccore_a, Cact_a
+                )  # (ncore_a,nact_a)
+                dh_AA_a -= L_Ai_a @ L_iA_a
 
         # h_eff^β: + L_AA^β * v_tot  - sum_{j in core_β} L_{A j}^β L_{j A}^β
         if nact_b:
@@ -504,7 +512,7 @@ def get_h1e_chols_cas(
             if ncore_b:
                 L_Ai_b = chol_ao_to_orb_blocks(chol_ao, Xmat, Cact_b, Ccore_b)
                 L_iA_b = chol_ao_to_orb_blocks(chol_ao, Xmat, Ccore_b, Cact_b)
-                dh_AA_b -= (L_Ai_b @ L_iA_b)
+                dh_AA_b -= L_Ai_b @ L_iA_b
 
         # ---- Frozen-core 2e constant shift ----
         E2_core += 0.5 * (v_tot * v_tot)
@@ -528,9 +536,15 @@ def get_h1e_chols_cas(
         return (h_eff_AA_a, h_eff_AA_b), (L_AA_all_a, L_AA_all_b), nuc + E_core
 
 
-
-
-def get_h1e_chols(mol, Xmat=None, thresh=1.e-6, g=None, block_decompose_eri=False):
+def get_h1e_chols(
+    mol,
+    h1ao: backend.ndarray | None = None,
+    Xmat: backend.ndarray | None = None,
+    eri: backend.ndarray | None = None,
+    thresh: float = 1.0e-6,
+    g: backend.ndarray | None = None,
+    block_decompose_eri: bool = False,
+):
     r"""
     Calculate the one-electron Hamiltonian (h1e) in the orthogonal atomic orbital (OAO) basis
     and the Cholesky decomposition tensor for a molecular system.
@@ -542,10 +556,21 @@ def get_h1e_chols(mol, Xmat=None, thresh=1.e-6, g=None, block_decompose_eri=Fals
     ----------
     mol : object
         A molecular object used for integral calculations (e.g., PySCF's Mole object).
-    Xmat: ndarray
+    h1ao : numpy.ndarray | None
+        The core (one-electron) Hamiltonian in the (non-orthogonal) AO basis.
+    Xmat: numpy.ndarray | None
         a matrix use to rotate the h1e and eri (or chols)
+    eri : numpy.ndarray | None
+        The electron-repulsion integrals. If provided, compute the Cholesky decomposition
+        from them directly. (Only supported if block_decompose_eri = True).
+        Requires four-index eri; eri.shape = (nao, nao, nao, nao)
     thresh : float, optional
         Threshold for truncation in the Cholesky decomposition. Defaults to 1.e-6.
+    g : numpy.ndarray | None
+        Existing electron-boson coupling matrix.
+    block_decompose_eri : bool
+        If True, use a memory-efficient blocking algorithm to compute the
+        Cholesky tensors.
 
     Returns
     -------
@@ -565,7 +590,8 @@ def get_h1e_chols(mol, Xmat=None, thresh=1.e-6, g=None, block_decompose_eri=Fals
     norb = Xmat.shape[0]
 
     # h1e in OAO
-    h1ao = scf.hf.get_hcore(mol)
+    if h1ao is None:
+        h1ao = scf.hf.get_hcore(mol)
     h1e = reduce(numpy.dot, (Xmat.T, h1ao, Xmat))
 
     # nuclear energy
@@ -575,7 +601,10 @@ def get_h1e_chols(mol, Xmat=None, thresh=1.e-6, g=None, block_decompose_eri=Fals
         # get chols from sub block
         ltensors = chols_blocked(mol, thresh=thresh, max_chol_fac=15, g=g)
     else:
-        ltensors = chols_full(mol, thresh=thresh, g=g)
+        if eri is not None:
+            ltensors = chols_full(mol, eri=eri, thresh=thresh, g=g)
+        else:
+            ltensors = chols_full(mol, thresh=thresh, g=g)
 
     if mol.verbose > 3:
         print(f"Debug: norm of ltensor in AO = {numpy.linalg.norm(ltensors)}")
@@ -586,7 +615,7 @@ def get_h1e_chols(mol, Xmat=None, thresh=1.e-6, g=None, block_decompose_eri=Fals
     return h1e, ltensors, nuc
 
 
-def chols_full(mol, eri=None, thresh=1.e-12, aosym="s1", g=None):
+def chols_full(mol, eri=None, thresh=1.0e-12, aosym="s1", g=None):
     r"""
     Get Cholesky decomposition from the SVD of the full ERI.
 
@@ -610,7 +639,7 @@ def chols_full(mol, eri=None, thresh=1.e-12, aosym="s1", g=None):
     # print("full bock is used in cholesky decomposition")
 
     if eri is None:
-        eri = mol.intor('int2e_sph', aosym='s1')
+        eri = mol.intor("int2e_sph", aosym="s1")
     nao = eri.shape[0]
     if g is not None:
         eri += numpy.einsum("npq, nrs->pqrs", g, g)
@@ -623,17 +652,16 @@ def chols_full(mol, eri=None, thresh=1.e-12, aosym="s1", g=None):
     # print("s.shape", s.shape)
     # print(s>1.e-12)
 
-    idx = (s > thresh)
-    ltensor = (u[:,idx] * numpy.sqrt(s[idx])).T
+    idx = s > thresh
+    ltensor = (u[:, idx] * numpy.sqrt(s[idx])).T
     ltensor = ltensor.reshape(ltensor.shape[0], nao, nao)
 
     return ltensor
 
-def chols_blocked(mol, thresh=1.e-6, max_chol_fac=15,
-        g=None,
-        init_ltensor=None,
-        block_sparsity=False
-    ):
+
+def chols_blocked(
+    mol, thresh=1.0e-6, max_chol_fac=15, g=None, init_ltensor=None, block_sparsity=False
+):
     r"""
     Get modified Cholesky decomposition from the block decomposition of ERI.
     See Ref. :cite:`Henrik:2003rs, Nelson:1977si`.
@@ -693,11 +721,11 @@ def chols_blocked(mol, thresh=1.e-6, max_chol_fac=15,
         shls = (i, i + 1, 0, mol.nbas, i, i + 1, 0, mol.nbas)
         buf = mol.intor("int2e_sph", shls_slice=shls)
         di = buf.shape[0]
-        diag[ndiag:ndiag + di * nao] = buf.reshape(di * nao, di * nao).diagonal()
+        diag[ndiag : ndiag + di * nao] = buf.reshape(di * nao, di * nao).diagonal()
         if g is not None:
             # Add the g-modified diagonal term (sum over n)
             g_diag = numpy.einsum("nij,nij->ij", g, g)  # Summing over n
-            diag[ndiag:ndiag + di * nao] += g_diag.ravel()[ndiag:ndiag + di * nao]
+            diag[ndiag : ndiag + di * nao] += g_diag.ravel()[ndiag : ndiag + di * nao]
         ndiag += di * nao
 
     # Find initial maximum diagonal element
@@ -711,7 +739,7 @@ def chols_blocked(mol, thresh=1.e-6, max_chol_fac=15,
     Mapprox = numpy.zeros(nao * nao)
     # compute eri block
     ltensor[0] = _compute_eri_chunk(mol, nao, sj, sl, indices4bas, j, l, delta_max, g)
-    #if block_sparsity:
+    # if block_sparsity:
     #    # stored the data in tiled tensor!
 
     nchol = 0
@@ -719,7 +747,7 @@ def chols_blocked(mol, thresh=1.e-6, max_chol_fac=15,
         # Update cholesky vector
         start = time.time()
         # M'_ii = L_i^x L_i^x
-        Mapprox += (ltensor[nchol] * ltensor[nchol])
+        Mapprox += ltensor[nchol] * ltensor[nchol]
         # D_ii = M_ii - M'_ii
 
         delta = diag - Mapprox
@@ -744,7 +772,9 @@ def chols_blocked(mol, thresh=1.e-6, max_chol_fac=15,
         nchol += 1
         step_time = time.time() - start
         if mol.verbose > 3 and nchol % max(2, nao // 2) == 0:
-            print(f"# Iteration {nchol:5d}: delta_max = {delta_max:13.8e}: time = {step_time:13.8e}")
+            print(
+                f"# Iteration {nchol:5d}: delta_max = {delta_max:13.8e}: time = {step_time:13.8e}"
+            )
 
         # Stop if maximum number of Cholesky vectors is reached
         if nchol >= max_chols:
@@ -788,7 +818,7 @@ def _compute_eri_chunk(mol, nao, sj, sl, indices4bas, j, l, delta_max, g=None):
     return eri_chunk / numpy.sqrt(delta_max)
 
 
-def chols_blocked_distributed(mol, thresh=1.e-6, max_chol_fac=15, g=None):
+def chols_blocked_distributed(mol, thresh=1.0e-6, max_chol_fac=15, g=None):
     r"""
     Distributed MPI parallel of blocked CD (TBA).
     """
@@ -798,6 +828,7 @@ def chols_blocked_distributed(mol, thresh=1.e-6, max_chol_fac=15, g=None):
 #
 # analysis tools
 #
+
 
 def get_mean_std(energies, N=10):
     r"""
@@ -824,7 +855,9 @@ def get_mean_std(energies, N=10):
     std_dev = numpy.std(last_m_real)
     return mean, std_dev
 
-#import pandas as pd
+
+# import pandas as pd
+
 
 def autocorr_func(x, normalize=True):
     r"""
@@ -861,12 +894,13 @@ def autocorr_func(x, normalize=True):
     x_mean = numpy.mean(x)
     f = numpy.fft.fft(x - x_mean, n=2 * n)
     acf = numpy.fft.ifft(f * numpy.conjugate(f))[: len(x)].real
-    acf /= (4 * n)  # Normalization factor
+    acf /= 4 * n  # Normalization factor
 
     if normalize:
         acf /= acf[0]  # Normalize to 1 at zero lag
 
     return acf
+
 
 def auto_window(autocorr_times, c=5.0):
     r"""
@@ -893,6 +927,7 @@ def auto_window(autocorr_times, c=5.0):
     """
     mask = numpy.arange(len(autocorr_times)) < c * autocorr_times
     return numpy.argmin(mask) if numpy.any(mask) else len(autocorr_times) - 1
+
 
 def get_autocorr_time(y, c=5.0):
     r"""
@@ -1021,17 +1056,22 @@ def analysis_autocorr(y, name="etot", method="zscore", threshold=10.0, verbose=F
         for n, tautocorr in zip(reversed(Ndata), reversed(autocorr_times)):
             print(f"nsamples: {n}, autocorrelation time: {tautocorr}")
 
-    block_size = int(numpy.ceil(autocorr_times[0]))  # Use the estimate with the largest sample size
+    block_size = int(
+        numpy.ceil(autocorr_times[0])
+    )  # Use the estimate with the largest sample size
     nblocks = len(y_clean) // block_size
-    yblocked = [numpy.mean(y_clean[i * block_size : (i + 1) * block_size]) for i in range(nblocks)]
+    yblocked = [
+        numpy.mean(y_clean[i * block_size : (i + 1) * block_size])
+        for i in range(nblocks)
+    ]
 
     yavg = numpy.mean(yblocked)
     ystd = numpy.std(yblocked) / numpy.sqrt(nblocks)
 
     results = {
-            f"{name}": [yavg],
-            f"{name}_error": [ystd],
-            f"{name}_nsamp": [nblocks],
-            "ac_sampsize": [block_size],
+        f"{name}": [yavg],
+        f"{name}_error": [ystd],
+        f"{name}_nsamp": [nblocks],
+        "ac_sampsize": [block_size],
     }
     return results
