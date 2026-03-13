@@ -5,6 +5,30 @@ from abc import ABC, abstractmethod
 # matrix indices are given by (I, alpha) where I denotes the site, alpha the local state
 # The ordering of matrix indices is given by (0,1), ... , (0, M), (1,0), ..., (1,M), ..., (N,M)
 
+def get_psi_matrix(psi):
+    psi_size = int(np.sqrt(psi.shape)[0])
+    matrix = np.zeros((psi_size, psi_size), dtype=psi.dtype)
+    for Gamma in range(psi_size):
+        for n in range(psi_size):
+            matrix[Gamma, n] = psi[Gamma*(psi_size) + n]
+    return matrix
+
+def get_psi_vector(psi):
+    a, b = psi.shape
+    vec = np.zeros(psi.size, dtype=psi.dtype)
+    for Gamma in range(a):
+        for n in range(b):
+            vec[Gamma*a + n] = psi[Gamma, n]
+    return vec
+
+def _get_annahilation_operators(M):
+    C = np.zeros((M, 2**M, 2**M))
+    for i in range(M):
+        for state in range(2**M):
+            if (state & (1 << i)):
+                C[i, state & ~(1 << i), state] = (-1)**(bin(state >> (i+1)).count('1'))
+    return C
+
 class FermionGASCF(ABC):
     def __init__(self, M, Ne):
         self.N = len(M)
@@ -54,15 +78,7 @@ class FermionGASCF(ABC):
         return res
 
     def get_block(self, Mat, I, J):
-        return Mat[self._Moff[I]:self._Moff[I+1], self._Moff[J]:self._Moff[J+1]]
-
-    def _get_annahilation_operators(self, M):
-        C = np.zeros((M, 2**M, 2**M))
-        for i in range(M):
-            for state in range(2**M):
-                if (state & (1 << i)):
-                    C[i, state & ~(1 << i), state] = (-1)**(bin(state >> (i+1)).count('1'))
-        return C           
+        return Mat[self._Moff[I]:self._Moff[I+1], self._Moff[J]:self._Moff[J+1]]           
     
     # psiarr is a vector of size N, containing embedding matrix states each of size 2**M x 2**M encoded as a 4**M component vector
     # L is a vector of size N, containing matrices of size MxM
@@ -138,23 +154,7 @@ class FermionGASCF(ABC):
         idx += N
 
         assert idx == len(x), "Unpack error: leftover elements in input array"
-        return psiarr, L, Lc, n, Ec
-    
-    def get_psi_matrix(self, psi):
-        psi_size = int(np.sqrt(psi.shape)[0])
-        matrix = np.zeros((psi_size, psi_size), dtype=psi.dtype)
-        for Gamma in range(psi_size):
-            for n in range(psi_size):
-                matrix[Gamma, n] = psi[Gamma*(psi_size) + n]
-        return matrix
-    
-    def get_psi_vector(self, psi):
-        a, b = psi.shape
-        vec = np.zeros(psi.size, dtype=psi.dtype)
-        for Gamma in range(a):
-            for n in range(b):
-                vec[Gamma*a + n] = psi[Gamma, n]
-        return vec  
+        return psiarr, L, Lc, n, Ec  
     
     def _get_tarr(self):
         N = self.N
@@ -169,7 +169,7 @@ class FermionGASCF(ABC):
         for I in range(self.N):
             # get local state and correlation
             M = self.M[I]
-            C = self._get_annahilation_operators(M)
+            C = _get_annahilation_operators(M)
             B = scipy.linalg.sqrtm(np.linalg.inv(Delta[I] @ (np.eye(M) - Delta[I])))
             psi = psiarr[I]
 
@@ -205,7 +205,7 @@ class FermionGASCF(ABC):
         # get coefficients for embedding Hamiltonian
         h = self._get_ht(I)
         U = self._get_U(I)
-        C = self._get_annahilation_operators(M)
+        C = _get_annahilation_operators(M)
         # construct local Hamiltonian
         Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))
         Hloc += sum(U[a, b, c, d] * C[a].T @ C[b].T @ C[c] @ C[d] for a in range(M) for b in range(M) for c in range(M) for d in range(M))
@@ -221,7 +221,7 @@ class FermionGASCF(ABC):
     def _compute_rdm(self, Delta):
         M, _ = Delta.shape
         K = scipy.linalg.logm((np.eye(M) - Delta) @ np.linalg.inv(Delta))
-        C = self._get_annahilation_operators(M)
+        C = _get_annahilation_operators(M)
         rho = scipy.linalg.expm(sum(-K[a, b] * C[a].T @ C[b] for a in range(M) for b in range(M)))
         return (1/np.trace(rho)) * rho
 
@@ -272,17 +272,12 @@ class FermionGASCF(ABC):
         # compute single particle correlations
         occ = [(i < self.Ne) for i in range(self._Moff[-1])]
         corr = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
-        # corr = np.empty((N, N), dtype=object)
-        # for I in range(N):
-        #     for J in range(N):
-        #         M = self.M
-        #         corr[I, J] = corr[self._Moff[I]:self._Moff[I+1], self._Moff[J]:self._Moff[J+1]]
 
         # get <psi_K| gradients, each of size 4**M
         grad_psiarr = []
         for K in range(N):
             M = self.M[K]
-            C = self._get_annahilation_operators(M)
+            C = _get_annahilation_operators(M)
             nK = n[K]
             B = np.diag(1/np.sqrt(nK*(1- nK)))
             
@@ -312,7 +307,7 @@ class FermionGASCF(ABC):
         for I in range(N):
             M = self.M[I]
             Lm = np.zeros((M,M), dtype=np.complex128)
-            C = self._get_annahilation_operators(M)
+            C = _get_annahilation_operators(M)
             for a in range(M):
                 for b in range(M):
                     Lm[a,b] = psiarr[I].conj().T @ np.kron(np.eye(2**M), C[b].T @ C[a]) @ psiarr[I]
@@ -351,7 +346,7 @@ class FermionGASCF(ABC):
 
             # get projector and normalized phi matrix for the evenly filled state   
             narr.append(M*[self.filling])
-            psivec = self.get_psi_vector(np.eye(2**M))
+            psivec = get_psi_vector(np.eye(2**M))
             psivec = psivec / np.linalg.norm(psivec)
             psiarr.append(psivec)
         
@@ -377,7 +372,7 @@ class FermionGASCF(ABC):
         Delta = [np.diag(n[K]) for K in range(N)]
         projectors = []
         for I in range(N):
-            projectors.append(self.get_psi_matrix(psiarr[I]) @ scipy.linalg.sqrtm(self._compute_rdm(Delta[I])))
+            projectors.append(get_psi_matrix(psiarr[I]) @ scipy.linalg.sqrtm(self._compute_rdm(Delta[I])))
 
         Hqp = self._compute_Hqp(psiarr, Delta, L)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
@@ -389,7 +384,7 @@ class FermionGASCF(ABC):
         return {
             "result":result,
             "E": E,
-            "psiarr":[self.get_psi_matrix(psiarr[I]) for I in range(N)],
+            "psiarr":[get_psi_matrix(psiarr[I]) for I in range(N)],
             "L":L,
             "Lc":Lc,
             "Delta":Delta,
