@@ -3,17 +3,19 @@ from sys import argv
 from ga_mband import *
 
 class FermiHubbard(FermionGASCF):
-    def __init__(self, N=12, filling=0.5, U=1.0, t=-1.0, J=-1.0, PBC=False):
-        if (N <= 0):
-            raise ValueError("number of sites must be positive")
+    def __init__(self, n=4, filling=0.25, U=1.0, t=-1.0, J=0.0, PBC=False):
+        if (n <= 0):
+            raise ValueError("lattice size must be positive")
         if ((filling <= 0) or (filling >= 1)):
             raise ValueError("filling must be in between 0 and 1 exclusive")
+        self.n = n
+        N = n**2
         Ne = int(filling * N * 2)
         self.U = np.zeros((2,2,2,2))
         self.U[0,1,0,1] = -U
         self.t = (t*np.eye(2)) + (J*np.array([[-1, 1], [1, -1]]))
         self.PBC = PBC
-        self.msg = f"N={N}, t={t}, U={U}, J={J}, PBC={PBC}, filling={Ne/(N*2)}"
+        self.msg = f"n={n}, N={N}, t={t}, U={U}, J={J} PBC={PBC}, filling={Ne/(N*2)}"
         super().__init__(N*[2], Ne)
 
     def get_ht(self, I):
@@ -22,11 +24,24 @@ class FermiHubbard(FermionGASCF):
     def get_U(self, I):
         return self.U
     
-    def get_tt(self, I, J):
-        d = abs(I - J)
+    def tuple_to_idx(self, i, j):
+        return i*self.n + j
+    
+    def idx_to_tuple(self, idx):
+        return divmod(idx, self.n)
+    
+    def is_nn(self, x1, x2):
+        i1, j1 = x1
+        i2, j2 = x2
+        di = abs(i1 - i2)
+        dj = abs(j1 - j2)
         if self.PBC:
-            d = min(d, self.N - d)
-        if (d == 1):
+            di = min(di, self.n - di)
+            dj = min(dj, self.n - dj)
+        return (di + dj == 1)
+    
+    def get_tt(self, I, J):
+        if self.is_nn(self.idx_to_tuple(I), self.idx_to_tuple(J)):
             return self.t
         return np.zeros((2,2))
     
@@ -48,7 +63,7 @@ if __name__ == '__main__':
         elif (len(argv) == 3):
             gamf.kernel(method=argv[1], tolerance=float(argv[2]))
     elif (len(argv) <= 5):
-        gamf = FermiHubbard(N=int(argv[3]), PBC=PBC)
+        gamf = FermiHubbard(n=int(argv[3]), PBC=PBC)
         if (len(argv) == 4):
             gamf.kernel(method=argv[1], tolerance=float(argv[2]))
         elif (len(argv) == 5):

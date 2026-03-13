@@ -164,13 +164,14 @@ class FermionGASCF(ABC):
                 tarr[I, J] = self._get_tt(I, J)
         return tarr
 
-    def _compute_renormalizations(self, psiarr, Delta):
+    def _compute_renormalizations(self, psiarr, n):
         R = []
         for I in range(self.N):
             # get local state and correlation
             M = self.M[I]
             C = _get_annahilation_operators(M)
-            B = scipy.linalg.sqrtm(np.linalg.inv(Delta[I] @ (np.eye(M) - Delta[I])))
+            nI = n[I]
+            B = np.diag(1/np.sqrt(nI*(1-nI)))
             psi = psiarr[I]
 
             # compute R
@@ -182,12 +183,10 @@ class FermionGASCF(ABC):
 
         return R
     
-    def _compute_Hqp(self, psiarr, Delta, L, tarr=None, R=None):
+    def _compute_Hqp(self, L, R, tarr=None):
         N = self.N
         if (tarr is None):
             tarr = self._get_tarr()
-        if (R is None):
-            R = self._compute_renormalizations(psiarr, Delta)
         t = np.block(tarr.tolist())
         Rblock = scipy.linalg.block_diag(*R)
         
@@ -228,13 +227,11 @@ class FermionGASCF(ABC):
     def _compute_lagrangian(self, x):
         N = self.N
         psiarr, L, Lc, n, Ec = self._unpack_vector(x)
-        Delta = []
-        for K in range(N):
-            Delta.append(np.diag(n[K]))
         Lag = 0
         
         # calculate Hqp and energies of filled eigenstates
-        Hqp = self._compute_Hqp(psiarr, Delta, L)
+        R = self._compute_renormalizations(psiarr, n)
+        Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         Lag += sum(qp_energy[i] for i in range(self.Ne))
 
@@ -247,7 +244,7 @@ class FermionGASCF(ABC):
             Lag += Ec[I] * (1 - (psi.T.conj() @ psi))
 
         #  calculate Lmix
-        Lmix = -sum(np.trace((L[I] + Lc[I]) @ Delta[I].T) for I in range(N))
+        Lmix = -sum(np.trace((L[I] + Lc[I]) @ np.diag(n[I])) for I in range(N))
         Lag += Lmix + Lmix.conj()
 
         return Lag
@@ -255,17 +252,14 @@ class FermionGASCF(ABC):
     def _compute_gradient(self, x):
         N = self.N
         psiarr, L, Lc, n, Ec = self._unpack_vector(x)
-        Delta = []
-        for K in range(N):
-            Delta.append(np.diag(n[K]))
         tarr = self._get_tarr()
 
         # get energy gradients
         grad_Ec = [1 - (psiarr[I].T.conj() @ psiarr[I]) for I in range(N)]
 
         # get quasiparticle and embedding Hamiltonians
-        R = self._compute_renormalizations(psiarr, Delta)
-        Hqp = self._compute_Hqp(psiarr, Delta, L, tarr=tarr, R=R)
+        R = self._compute_renormalizations(psiarr, n)
+        Hqp = self._compute_Hqp(L, R, tarr=tarr, )
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         Hemb = [self._compute_Hemb(I, Lc) for I in range(N)]
 
@@ -301,7 +295,7 @@ class FermionGASCF(ABC):
                     DH = np.zeros(Hqp.shape)
                     DH[self._Moff[I] + a, self._Moff[I] + b] = 1
                     Lm[a, b] = self._compute_derivative_energy(qp_coeff, DH)
-            grad_L.append(Lm - Delta[I])
+            grad_L.append(Lm - np.diag(n[I]))
 
         grad_Lc = []
         for I in range(N):
@@ -311,7 +305,7 @@ class FermionGASCF(ABC):
             for a in range(M):
                 for b in range(M):
                     Lm[a,b] = psiarr[I].conj().T @ np.kron(np.eye(2**M), C[b].T @ C[a]) @ psiarr[I]
-            grad_Lc.append(Lm - Delta[I])
+            grad_Lc.append(Lm - np.diag(n[I]))
 
         # get n gradients
         grad_n = []
@@ -374,7 +368,8 @@ class FermionGASCF(ABC):
         for I in range(N):
             projectors.append(get_psi_matrix(psiarr[I]) @ scipy.linalg.sqrtm(self._compute_rdm(Delta[I])))
 
-        Hqp = self._compute_Hqp(psiarr, Delta, L)
+        R = self._compute_renormalizations(psiarr, n)
+        Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         occ = [(i < self.Ne) for i in range(self._Moff[-1])]
         corr = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T

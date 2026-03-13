@@ -187,12 +187,10 @@ class FermionGASCF(ABC):
 
         return R
     
-    def _compute_Hqp(self, psiarr, Delta, L, tarr=None, R=None):
+    def _compute_Hqp(self,L, R, tarr=None):
         N = self.N
         if (tarr is None):
             tarr = self._get_tarr()
-        if (R is None):
-            R = self._compute_renormalizations(psiarr, Delta)
         t = np.block(tarr.tolist())
         Rblock = scipy.linalg.block_diag(*R)
         
@@ -236,7 +234,8 @@ class FermionGASCF(ABC):
         Lag = 0
         
         # calculate Hqp and energies of filled eigenstates
-        Hqp = self._compute_Hqp(psiarr, Delta, L)
+        R = self._compute_renormalizations(psiarr, Delta)
+        Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         Lag += sum(qp_energy[i] for i in range(self.Ne))
 
@@ -264,7 +263,7 @@ class FermionGASCF(ABC):
         # get quasiparticle and embedding Hamiltonians
         R = self._compute_renormalizations(psiarr, Delta)
         tarr = self._get_tarr()
-        Hqp = self._compute_Hqp(psiarr, Delta, L, tarr=tarr, R=R)
+        Hqp = self._compute_Hqp(L, R, tarr=tarr)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         Hemb = [self._compute_Hemb(I, Lc) for I in range(N)]
 
@@ -401,7 +400,8 @@ class FermionGASCF(ABC):
             rho = self._compute_rdm(Delta[I])
             projectors.append(get_psi_matrix(psiarr[I]) @ np.linalg.inv(scipy.linalg.sqrtm(rho)))
 
-        Hqp = self._compute_Hqp(psiarr, Delta, L)
+        R = self._compute_renormalizations(psiarr, Delta)
+        Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         occ = [(i < self.Ne) for i in range(self._Moff[-1])]
         corr = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
