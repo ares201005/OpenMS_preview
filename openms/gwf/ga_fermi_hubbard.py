@@ -13,8 +13,8 @@ class FermiHubbard(FermionGASCF):
         self.U[0,1,0,1] = -U
         self.t = (t*np.eye(2)) + (J*np.array([[-1, 1], [1, -1]]))
         self.PBC = PBC
-        self.msg = f"N={N}, t={t}, U={U}, J={J}, PBC={PBC}, filling={filling}"
-        super().__init__(N, Ne, 2)
+        self.msg = f"N={N}, t={t}, U={U}, J={J}, PBC={PBC}, filling={Ne/(N*2)}"
+        super().__init__(N*[2], Ne)
 
     def get_ht(self, I):
         return np.zeros((2,2))
@@ -23,8 +23,12 @@ class FermiHubbard(FermionGASCF):
         return self.U
     
     def get_tt(self, I, J):
-        nhops = (abs(I - J) % self.N) if self.PBC else abs(I - J)
-        if (nhops == 1):
+        link = False
+        if (abs(I-J) == 1):
+            link = True
+        elif (self.PBC and ({I, J} == {0, self.N-1})):
+            link = True
+        if link:
             return self.t
         return np.zeros((2,2))
     
