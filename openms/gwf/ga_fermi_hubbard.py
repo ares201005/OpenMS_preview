@@ -34,7 +34,7 @@ class FermiHubbard(FermionGASCF):
         if verbose:
             print("kernel invoked: " + self.msg)
         res = super().kernel(verbose=verbose, **kwargs)
-        print(f"Computed Ne = {sum(np.trace(res['Delta'][I]) for I in range(self.N))}, self.Ne = {self.Ne}")
+        print(f"Computed Ne = {sum(np.trace(res.Delta(I)) for I in range(self.N))}, self.Ne = {self.Ne}")
         breakpoint()
 
 if __name__ == '__main__':
