@@ -197,6 +197,42 @@ class FermionGASCF(ABC):
 
         return R
     
+    def _compute_2body_renormalizations(self, psiarr, Delta):
+        Xdict = {}
+        for M in set(self.M):
+            C = _get_annahilation_operators(M)
+            X = np.zeros((M,M,2**M, 2**M))
+            for a in range(M):
+                for b in range(M):
+                    X[a, b] = C[a].T @ C[b]
+            Xdict[M] = X
+        
+        T = []
+        Tsrc = []
+        for I in range(self.N):
+            psi = psiarr[I]
+            M = self.M[I]
+            X =  Xdict[M] 
+            G = np.zeros((M,M,M,M), dtype=np.complex128)
+            P = np.zeros((M,M), dtype=np.complex128)
+            for alpha in range(M):
+                for beta in range(M):
+                    M1 = X[alpha, beta]
+                    P[alpha, beta] = psi.conj() @ np.kron(M1, np.eye(2**M)) @ psi
+                    for a in range(M):
+                        for b in range(M):
+                            G[alpha, beta, a, b] = psi.conj().T @ np.kron(M1, X[a, b]) @ psi
+                            
+            D = Delta[I]
+            A = scipy.linalg.sqrtm(D @ (np.eye(M) - D))
+            B = np.linalg.inv(A)
+            Tint = G - np.einsum('ab,ij->abij', P, D)
+            T4 = np.einsum('ijcd,da,cb->ijab', Tint, B, B)
+            T.append(T4)
+            Tsrc.append(P - np.einsum('abcd,cd->ab', T4, D))
+
+        return T, Tsrc
+    
     def _compute_Hqp(self,L, R, tarr=None):
         N = self.N
         if (tarr is None):
@@ -385,33 +421,71 @@ class FermionGASCF(ABC):
         return self._pack_vector(psiarr, L, Lc, Delta, Ec)
 
     def kernel(self, method="krylov", x0=None, maxiter=None, tolerance=1e-6, verbose=True):
+        # create initial guess and solve
         N = self.N
-
         if (x0 == None):
             x0 = self._get_initial_guess()
-
         options = {}
         if maxiter:
             options['maxiter'] = maxiter
         if verbose:
             options['disp'] = True
-
         options['fatol'] = tolerance
         result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
-        
+
+        # parse result
         psiarr, L, Lc, Delta, Ec = self._unpack_vector(result.x)
         R = self._compute_renormalizations(psiarr, Delta)
         Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         occ = [(i < self.Ne) for i in range(self._Moff[-1])]
         corr = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
-        
         E = self._compute_lagrangian(result.x)
         result.pop("x")
-        return FermionGASCFResult(self.N, self._Moff, self.Ne, E, psiarr, L, Lc, Delta, Ec, qp_energy, qp_coeff, corr=corr, result=result)
+
+        # compute 1-body correlations, then fix diagonal blocks
+        Rblock = scipy.linalg.block_diag(*R)
+        expcorr = Rblock @ corr @ Rblock.T.conj()
+        Cdict = {}
+        for M in set(self.M):
+            Cdict[M] = _get_annahilation_operators(M)
+        for I in range(N):
+            psi = psiarr[I]
+            M = self.M[I]
+            C = Cdict[M]
+            for a in range(M):
+                for b in range(M):
+                    expcorr[self._Moff[I]+a, self._Moff[I]+b] = psi.conj() @ np.kron(C[a].T @ C[b], np.eye(2**M)) @ psi
+
+        # compute density-density correlations
+        # Wick's theorem is OK here since the quaspiarticle states are a single Slater determinant
+        T, Tsrc = self._compute_2body_renormalizations(psiarr, Delta)
+        TD = []
+        for I in range(N):
+            TD.append(np.einsum('aacd,cd->a', T[I], Delta[I]))
+        narr = np.zeros((N,N), dtype=object)
+        for I in range(N):
+            for J in range(N):
+                ncorr =  np.zeros((self.M[I], self.M[J]), dtype=np.complex128)
+                if (I == J):
+                    psi = psiarr[I]
+                    M = self.M[I]
+                    C = Cdict[M]
+                    for a in range(M):
+                        for b in range(M):
+                            ncorr[a, b] = psi.conj() @ np.kron(C[a].T @ C[a] @ C[b].T @ C[b], np.eye(2**M)) @ psi
+                else:
+                    for a in range(self.M[I]):
+                        for b in range(self.M[J]):
+                            ncorr[a, b] = -np.trace(T[I][a,a].T @ self._get_block(corr, I, J) @ T[J][b,b].T @ self._get_block(corr, J, I))
+                    ncorr = ncorr + np.outer(np.diag(Tsrc[I]),TD[J]) + np.outer(TD[I], np.diag(Tsrc[J])) + np.outer(np.diag(Tsrc[I]), np.diag(Tsrc[J]))
+
+                narr[I, J] = ncorr
+
+        return FermionGASCFResult(self.N, self._Moff, self.Ne, E, psiarr, L, Lc, Delta, Ec, result=result, corr=expcorr, narr=narr)
     
 class FermionGASCFResult:
-    def __init__(self, N, Moff, Ne, E, psiarr, L, Lc, Delta, Ec, qp_energy, qp_coeff, corr=None, result=None):
+    def __init__(self, N, Moff, Ne, E, psiarr, L, Lc, Delta, Ec, result=None, corr=None, narr=None):
         self.N = N
         self.Ne = Ne
         self._Moff = Moff
@@ -421,14 +495,9 @@ class FermionGASCFResult:
         self.Lc = Lc
         self.D = Delta
         self.Ec = Ec
-        self.qp_energy = qp_energy
-        self._qp_coeff = qp_coeff
-        if (corr is None):
-            occ = [(i < self.Ne) for i in range(Moff[-1])]
-            corr = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
+        self.result = result
         self.corr = corr
-        if result:
-            self.result = result
+        self.narr = narr
 
         projectors = []
         for I in range(N):
@@ -438,22 +507,14 @@ class FermionGASCFResult:
     def Delta(self, I):
         return self.D[I]
 
-    # return $C_{ab} = \bra{\Psi_0^e} c^\dagger_{Ia} c_{Jb} \ket{\Psi_0^e}$
+    # return $C_{ab} = \bra{\Psi_G} c^\dagger_{Ia} c_{Jb} \ket{\Psi_G}$
     def get_1body_corr(self, I, J):
+        if (self.corr is None):
+            return None
         return _get_block(self.corr, self._Moff, I, J)
     
-    # return $C_{a,b,c,d} = \bra{\Psi_0^e} c^\dagger_{Ia} c^\dagger_{Jb}, c_{Kc} c_{Ld} \ket{\Psi_0^e}$
-    # for a Slater determinant state it sufficies to use Wick's theorem
-    def get_2body_corr(self, I, J, K, L):
-        return np.einsum('ad,bc->abcd', self.get_1body_corr(I, L), self.get_1body_corr(J, K)) - np.einsum('ac,bd->abcd', self.get_1body_corr(I, K), self.get_1body_corr(J, L))
-    
-    # given n_p = c^\dagger_p c_p
-    # compute $C_{ab} = \bra{\Psi_0^e} n_{Ia} n_{Jb} \ket{\Psi_0^e}$
-    # again Wick's theorem works here
+    # return $C_{ab} = \bra{\Psi_G} n_{Ia} n_{Jb} \ket{\Psi_G}$
     def get_number_corr(self, I, J):
-        CIJ = self.get_1body_corr(I, J)
-        Cmat = np.outer(np.diag(self.get_1body_corr(I, I)), np.diag(self.get_1body_corr(J, J)))
-        Cmat -= abs(CIJ)**2
-        if (I == J):
-            Cmat[np.diag_indices_from(Cmat)] += np.diag(CIJ)
-        return Cmat
+        if (self.narr is None):
+            return None
+        return self.narr[I, J]
