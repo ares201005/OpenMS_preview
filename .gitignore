@@ -25,6 +25,7 @@ curr*
 *.pdf
 *log*
 *.txt
+*.csv
 *.bak
 *.tmp
 *.png
@@ -36,7 +37,7 @@ curr*
 # output files
 *.chk
 
-tests/
+#tests/
 *deprecate*/
 
 

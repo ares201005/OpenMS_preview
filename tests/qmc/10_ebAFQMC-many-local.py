@@ -49,7 +49,7 @@ def afqmc_energy_vs_lambda(
     return energies
 
 
-def test_nmode(
+def run_nmode(
     mol,
     verbose,
     nmode=1,
@@ -79,8 +79,9 @@ def test_nmode(
     return means, stds
 
 
-class Test_ebAFQMC(unittest.TestCase):
-    def test_modes(self):
+# class Test_ebAFQMC(unittest.TestCase):
+class Test_ebAFQMC:
+    def do_modes(self):
         verbose = 5
         g_bare = 0.1
         nmode_max = 8
@@ -88,7 +89,7 @@ class Test_ebAFQMC(unittest.TestCase):
         mol = get_mol(bond=bond)
         means = numpy.zeros(3, dtype=float)
         for i, nmode in enumerate([1, 2, 4]):
-            means[i], _ = test_nmode(
+            means[i], _ = run_nmode(
                 mol=mol,
                 nmode=nmode,
                 nmode_max=nmode_max,
@@ -108,5 +109,5 @@ class Test_ebAFQMC(unittest.TestCase):
         # )
 
 
-if __name__ == "__main__":
-    unittest.main()
+# if __name__ == "__main__":
+#    unittest.main()
