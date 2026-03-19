@@ -570,11 +570,16 @@ class QMCbase(object):
         # with h5py.File("input.h5") as fa:
         #    ao_coeff = fa["ao_coeff"][()]
 
-        hcore = scf.hf.get_hcore(self.mol)
+        if self.mf is not None:
+            hcore = self.mf.get_hcore()
+            overlap = self.mf.get_ovlp()
+        else:
+            hcore = scf.hf.get_hcore(self.mol)
+            overlap = self.mol.intor("int1e_ovlp")
         logger.debug(self, f"Debug: norm of hcore = {backend.linalg.norm(hcore)}")
         if self.OAO:
             # Lowdin orthogonalization S^{-/2} -> X
-            overlap = self.mol.intor("int1e_ovlp")
+            # overlap = self.mol.intor("int1e_ovlp")
             Xmat = lo.orth.lowdin(overlap)
         else:
             Xmat = self.mf.mo_coeff
@@ -601,13 +606,24 @@ class QMCbase(object):
             g_ptr = g_AO  # create a pointer to g_AO
 
         # get h1e, eri, ltensors in OAO/MO representation
-        hcore, ltensor, self.nuc_energy = tools.get_h1e_chols(
-            mol,
-            Xmat=Xmat,
-            thresh=self.chol_thresh,
-            g=g_ptr,
-            block_decompose_eri=self.block_decompose_eri,
-        )
+        if self.mf is not None:  # is this right?
+            hcore, ltensor, self.nuc_energy = tools.get_h1e_chols(
+                mol,
+                h1ao=hcore,
+                Xmat=Xmat,
+                eri=self.mf._eri,
+                thresh=self.chol_thresh,
+                g=g_ptr,
+                block_decompose_eri=self.block_decompose_eri,
+            )
+        else:
+            hcore, ltensor, self.nuc_energy = tools.get_h1e_chols(
+                mol,
+                Xmat=Xmat,
+                thresh=self.chol_thresh,
+                g=g_ptr,
+                block_decompose_eri=self.block_decompose_eri,
+            )
         # print("Norm of ltensor is: ", backend.linalg.norm(ltensor))
 
         # shape of h1e [nspin, nao, nao]
