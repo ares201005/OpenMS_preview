@@ -1,6 +1,6 @@
 import numpy as np
 from sys import argv
-from ga_mband import *
+from ga_mband import FermionGASCF
 
 class FermiHubbard(FermionGASCF):
     def __init__(self, n=4, filling=0.25, U=1.0, t=-1.0, J=0.0, PBC=False):

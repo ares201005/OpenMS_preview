@@ -65,16 +65,36 @@ Single-band Gutzwiller method
 Multi-band Gutzwiller method for local correlation
 ==================================================
 
-.. automodule:: openms.gwf.ga_mband_diis
+FermionGASCF
+----
+
+Public API
+~~~~~~~~~~
+
+.. automodule:: openms.gwf.ga_mband
    :members:
    :undoc-members:
    :show-inheritance:
 
+Private API
+~~~~~~~~~~~
 
+.. automodule:: openms.gwf.ga_mband
+   :member-order: bysource
+   :private-members: _compute_rdm, _compute_renormalizations, _compute_2body_renormalizations, _compute_Hqp, _compute_Hemb, _compute_lagrangian, _compute_gradient
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: get_U, get_ht, get_tt, kernel, get_psi_matrix, get_psi_vector, FermionGASCFResult
+
+
+ga_local.GASCF
+-------------------------
 .. automodule:: openms.gwf.ga_local
    :members:
    :undoc-members:
    :show-inheritance:
+
 
 Multi-band Gutzwiller method for nonlocal correlation
 =====================================================

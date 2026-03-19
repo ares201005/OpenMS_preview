@@ -6,6 +6,9 @@ from abc import ABC, abstractmethod
 # The ordering of matrix indices is given by (0,1), ... , (0, M), (1,0), ..., (1,M), ..., (N,M)
 
 def get_psi_matrix(psi):
+    r"""
+    Convert state vector :math:`\ket{\Psi_I}` to matrix form :math:`\phi_I`.
+    """
     psi_size = int(np.sqrt(psi.size))
     matrix = np.zeros((psi_size, psi_size), dtype=psi.dtype)
     for Gamma in range(psi_size):
@@ -14,6 +17,9 @@ def get_psi_matrix(psi):
     return matrix
 
 def get_psi_vector(psi):
+    r"""
+    Convert matrix :math:`\phi_I` to state vector :math:`\ket{\Psi_I}`.
+    """
     a, b = psi.shape
     vec = np.zeros(psi.size, dtype=np.complex128)
     for Gamma in range(a):
@@ -30,6 +36,17 @@ def _get_annahilation_operators(M):
     return C
 
 def _compute_rdm(Delta):
+    r"""
+    Given local correlation matrix :math:`\Delta` in the single-particle space, return
+
+    .. math::
+
+            \rho^0_I = \frac{1}{Z}\exp\left(
+            -\sum_{\alpha\beta}\left[ \ln\left(\frac{\mathbb{I}-\Delta}{\Delta}\right)_{\alpha\beta} c^\dagger_{I\alpha} c_{I\beta}\right]
+        \right)
+
+    in the full Fock space.
+    """
     M, _ = Delta.shape
     K = scipy.linalg.logm((np.eye(M) - Delta) @ np.linalg.inv(Delta))
     C = _get_annahilation_operators(M)
@@ -40,6 +57,22 @@ def _get_block(A, Moff, I, J):
     return A[Moff[I]:Moff[I+1], Moff[J]:Moff[J+1]]
 
 class FermionGASCF(ABC):
+    r"""
+    The electronic Hamiltonian being minimized under :math:`\ket{\Psi_G}` can be written as follows:
+
+    .. math::
+        \hat{H}_e &= \sum_I \left[ \sum_{\alpha\beta} \tilde{h}^{I}_{\alpha\beta}c^\dagger_{I\alpha}c_{I\beta} + \sum_{\alpha\beta\gamma\delta} U^I_{\alpha\beta\gamma\delta} c^\dagger_{I\alpha} c_{I\beta}^\dagger c_{I\gamma} c_{I\delta} \right] \\ 
+        &+ \sum_{I \neq J} \sum_{\alpha\beta} \left[ \tilde{t}^{IJ}_{\alpha\beta}c^\dagger_{I\alpha}c_{J\beta} \right]
+
+    :param M: array describing the number of states at each site
+    :param Ne: number of electrons present in the system
+
+    For convenience, one can define
+
+    .. math::
+        A^K &\equiv \left[\Delta^K (\mathbb{I} - \Delta^K) \right]^{1/2} \\
+        B^K &\equiv (A^K)^{-1}
+    """
     def __init__(self, M, Ne):
         self.N = len(M)
         self.Ne = Ne
@@ -57,6 +90,10 @@ class FermionGASCF(ABC):
 
     @abstractmethod
     def get_ht(self, I):
+        r"""
+        Return the matrix :math:`\tilde{h}^I_{ab}` for site :math:`I`.
+        Must be implemented by the  concrete class.
+        """
         pass
 
     def _get_ht(self, I):
@@ -68,6 +105,10 @@ class FermionGASCF(ABC):
     
     @abstractmethod
     def get_U(self, I):
+        r"""
+        Return the tensor :math:`U^I_{abcd}` for site :math:`I`.
+        Must be implemented by the  concrete class.
+        """
         pass
 
     def _get_U(self, I):
@@ -79,6 +120,10 @@ class FermionGASCF(ABC):
     
     @abstractmethod
     def get_tt(self, I, J):
+        r"""
+        Return the matrix :math:`\tilde{t}^{IJ}_{ab}` between sites :math:`I \neq J`.
+        Must be implemented by the  concrete class.
+        """
         pass
 
     def _get_tt(self, I, J):
@@ -180,6 +225,14 @@ class FermionGASCF(ABC):
         return tarr  
 
     def _compute_renormalizations(self, psiarr, Delta):
+        r"""
+        Compute all 1-body renormalization factors, given by
+
+        .. math::
+
+             \mathcal{R}^I_{\alpha a} = \displaystyle\sum_b \left[ \bra{\Psi_I} c_{\alpha}^\dagger f_{b}^\dagger \ket{\Psi_I} B^I_{ba} \right]
+
+        """
         R = []
         for I in range(self.N):
             # get local state and correlation
@@ -198,6 +251,15 @@ class FermionGASCF(ABC):
         return R
     
     def _compute_2body_renormalizations(self, psiarr, Delta):
+        r"""
+        Compute all 2-body (number-preserving) renormalization factors, given by
+
+        .. math::
+
+            \mathcal{T}^I_{\alpha\beta,ab} &= \displaystyle\sum_{cd} \left[ \bra{\Psi_I} c_{\alpha}^\dagger c_\beta (f_d^\dagger f_c - \Delta^I_{cd} \mathbb{I}) \ket{\Psi_I} B^I_{da}B^I_{bc} \right] \\
+            \mathcal{T}^I_{\alpha\beta} &= \bra{\Psi_I} c_\alpha^\dagger c_\beta \ket{\Psi_I} - \sum_{ab} \mathcal{T}^I_{\alpha\beta, ab}\Delta^I_{ab}
+
+        """
         Xdict = {}
         for M in set(self.M):
             C = _get_annahilation_operators(M)
@@ -234,6 +296,16 @@ class FermionGASCF(ABC):
         return T, Tsrc
     
     def _compute_Hqp(self,L, R, tarr=None):
+        r"""
+        Compute
+
+        .. math::
+
+            \hat{H}_{qp} = & \sum_{IJ ab} \left[ \sum_{\alpha\beta}\tilde{t}^{IJ}_{\alpha\beta} \mathcal{R}^{I}_{\alpha a} \mathcal{R}^{J*}_{\beta b} \right] c^\dagger_{Ia}c_{Jb}  \\
+            & + \sum_{I ab} \left[ \lambda^I_{ab}c_{Ia}^\dagger c_{Ib} + h.c.  \right]
+
+        in the single-particle basis.
+        """
         N = self.N
         if (tarr is None):
             tarr = self._get_tarr()
@@ -250,6 +322,16 @@ class FermionGASCF(ABC):
         return Hqp
     
     def _compute_Hemb(self, I, Lc, C=None):
+        r"""
+        Compute
+
+        .. math::
+
+            \hat{H}_{emb}^I &= \displaystyle\sum_{\alpha\beta} \tilde{h}^{I}_{\alpha\beta}c^\dagger_{\alpha}c_{\beta} + \sum_{\alpha\beta\gamma\delta}U^{I}_{\alpha\beta\gamma\delta}c^\dagger_\alpha c_\beta^\dagger c_\gamma c_\delta \\
+            &+ \displaystyle\sum_{ab} \left[ (\lambda_c^I)_{ab}f_b^\dagger f_a + h.c. \right]
+
+        in the original tensor-product basis.
+        """
         M = self.M[I]
         # get coefficients for embedding Hamiltonian
         h = self._get_ht(I)
@@ -269,6 +351,24 @@ class FermionGASCF(ABC):
         return sum((eigmatrix[:, i].T.conj() @ DH @ eigmatrix[:, i]) for i in range(self.Ne))
 
     def _compute_lagrangian(self, x):
+        r"""
+        Compute
+
+        .. math::
+
+            &\mathcal{L}_e \left(\left\{ \ket{\Psi_I}, \Delta^I, \lambda^I, \lambda_c^I, E_c^I \right\}\right) \\
+            &= \bra{\Psi_0^e} \hat{H}_{qp} \left( \left\{ \ket{\Psi_I}, \Delta^I, \lambda^I \right\} \right) \ket{\Psi_0^e} \\
+            &+ \sum_I \left[\bra{\Psi_I} \hat{H}_{emb}^I \left(  \lambda^I_c \right) \ket{\Psi_I} + E^I_c \left( 1 - \braket{\Psi_I}\right)\right] \\
+            &+ \sum_I \left[ \mathcal{L}^I_{mix} \left( \left\{ \lambda^I, \lambda_c^I, \Delta^I \right\} \right) + c.c. \right]
+
+        where
+
+        .. math::
+
+                \mathcal{L}_{mix}^I = -\displaystyle\sum_{aa} \left(\lambda^I + \lambda_c^I \right)_{ab}\Delta^I_{ab}
+
+        Here, :math:`\ket{\Psi_0^e}` is a Slater determinant of the first ``self.Ne`` single-particle eigenstates of :math:`\hat{H}_{qp}` and is not an independent variable.
+        """
         N = self.N
         psiarr, L, Lc, Delta, Ec = self._unpack_vector(x)
         Lag = 0
@@ -294,6 +394,33 @@ class FermionGASCF(ABC):
         return Lag
 
     def _compute_gradient(self, x):
+        r"""
+        Compute the first derivatives
+
+        .. math::
+
+            \dfrac{\partial \mathcal{L}_e}{\partial E_c^K} &= 1 - \braket{\Psi_K} \\
+            \dfrac{\partial \mathcal{L}_e}{\partial \lambda^K_{ab}} &= \bra{\Psi_0^e} c_{Ka}^\dagger c_{Kb} \ket{\Psi_0^e} - \Delta^K_{ab} \\
+            \dfrac{\partial \mathcal{L}_e}{\partial (\lambda^K_c)_{ab}} &= \bra{\Psi_K} f_b^\dagger f_a \ket{\Psi_K} - \Delta^K_{ab} \\
+            \dfrac{\partial \mathcal{L}_e}{\partial \Delta^K_{yz}} &= -(\lambda^K + \lambda^K_c)_{yz} \\
+            &+ \displaystyle\sum_I \left[ \sum_{\alpha\beta,ab} \left[ \bra{\Psi_K} c_\alpha^\dagger f_\gamma^\dagger \ket{\Psi_K} Y^{K,(yz)}_{\gamma a}\tilde{t}^{KI}_{\alpha\beta} R^{I*}_{\beta b} \Delta^{KI}_{ab} \right] \right] \\
+            \dfrac{\partial \mathcal{L}_e}{\partial \bra{\Psi_K}} &= \hat{H}^K \ket{\Psi_K}
+
+        where
+
+        .. math::
+
+            Y^{K,(yz)} &= - B^K Z^{K,(yz)} B^K \\
+            A^K Z^{K,(yz)} + Z^{K,(yz)}A^K &= E^{(yz)}(\mathbb{I}- \Delta^K) - \Delta^K E^{(yz)}
+
+        and the Hermitian operator
+
+        .. math::
+
+            \hat{H}^K &= \hat{H}^K_{emb} - E_c^K \mathbb{I} \\
+            &+ \sum_{\alpha\gamma} \left[ \left[\sum_I \tilde{t}^{{IK}^T} \mathcal{R}^I \Delta^{IK}  {B^K}^\dagger \right]_{\alpha\gamma} c_\alpha f_\gamma\right] + h.c. \\
+
+        """
         N = self.N
         psiarr, L, Lc, Delta, Ec = self._unpack_vector(x)
         Cdict = {}
@@ -420,7 +547,18 @@ class FermionGASCF(ABC):
         Ec = np.zeros(N)
         return self._pack_vector(psiarr, L, Lc, Delta, Ec)
 
-    def kernel(self, method="krylov", x0=None, maxiter=None, tolerance=1e-6, verbose=True):
+    def kernel(self, method="krylov", x0=None, maxiter=None, tolerance=1e-4, verbose=True):
+        r"""
+        Use root finding (via scipy.optimize.root) on the gradient to calculate the ground state via Newton's method
+
+        :param method: type of root finding method to use
+        :param maxiter: maximum number of iterations (by default the solver iterates until convergence)
+        :param x0: optional initial guess for Newton's method.  If not provided it will be computed by the kernel.
+        :param tolerance: maximum acceptable gradient norm.  Default value is 1e-4.
+        :param verbose: show verbose output regarding the Newton solver.  Default value is True.
+
+        The kernel returns a ``FermionGASCFResult`` object that can be queried for success status and values of Lagrange multipliers, Gutzwiller parameters and projectors, and correlation functions.
+        """
         # create initial guess and solve
         N = self.N
         if (x0 == None):
@@ -482,10 +620,11 @@ class FermionGASCF(ABC):
 
                 narr[I, J] = ncorr
 
-        return FermionGASCFResult(self.N, self._Moff, self.Ne, E, psiarr, L, Lc, Delta, Ec, result=result, corr=expcorr, narr=narr)
+        return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, Delta, Ec, result=result, corr=expcorr, narr=narr)
     
 class FermionGASCFResult:
-    def __init__(self, N, Moff, Ne, E, psiarr, L, Lc, Delta, Ec, result=None, corr=None, narr=None):
+    def __init__(self, Moff, Ne, E, psiarr, L, Lc, Delta, Ec, result=None, corr=None, narr=None):
+        N = len(Moff) - 1
         self.N = N
         self.Ne = Ne
         self._Moff = Moff
@@ -493,7 +632,7 @@ class FermionGASCFResult:
         self.psiarr = [get_psi_matrix(psiarr[I]) for I in range(N)]
         self.L = L
         self.Lc = Lc
-        self.D = Delta
+        self._D = Delta
         self.Ec = Ec
         self.result = result
         self.corr = corr
@@ -501,20 +640,27 @@ class FermionGASCFResult:
 
         projectors = []
         for I in range(N):
-            projectors.append(get_psi_matrix(psiarr[I]) @ scipy.linalg.sqrtm(_compute_rdm(self.Delta(I))))
+            projectors.append(self.psiarr[I] @ scipy.linalg.sqrtm(_compute_rdm(self.Delta(I))))
         self.projectors = projectors
 
     def Delta(self, I):
-        return self.D[I]
-
-    # return $C_{ab} = \bra{\Psi_G} c^\dagger_{Ia} c_{Jb} \ket{\Psi_G}$
+        r"""
+        Return the matrix :math:`M_{ab} = \Delta^I_{ab}`.
+        """
+        return self._D[I]
+    
     def get_1body_corr(self, I, J):
+        r"""
+        Return the matrix :math:`M_{ab} = \bra{\Psi_G} c^\dagger_{Ia} c_{Jb} \ket{\Psi_G}`.
+        """
         if (self.corr is None):
             return None
         return _get_block(self.corr, self._Moff, I, J)
     
-    # return $C_{ab} = \bra{\Psi_G} n_{Ia} n_{Jb} \ket{\Psi_G}$
     def get_number_corr(self, I, J):
+        r"""
+        Return the matrix :math:`M_{ab} = \bra{\Psi_G} n_{Ia} n_{Jb} \ket{\Psi_G}` where :math:`n_{Ia} \equiv c^\dagger_{Ia} c_{Ia}`.
+        """
         if (self.narr is None):
             return None
         return self.narr[I, J]
