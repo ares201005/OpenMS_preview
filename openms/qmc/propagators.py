@@ -773,13 +773,9 @@ class Phaseless(PropagatorBase):
         if self.nfields > self.nbarefields:
             self.xi_bilinear = xi[:, self.nbarefields : self.nfields]
 
-        #    logger.debug(self, f"ENABLED CHEAT FOR MULTIPLE MODE DEBUGGING!")
-        #    logger.debug(self, f"SAME AUXILIARY FIELD SAMPLE FOR ALL MODES!")
-        #    self.xi_bilinear[...] = 0.0
-        #    # first_bilinear = xi[:, self.nbarefields : self.nbarefields + 2]
-        #    # num_repeat = int((self.nfields - self.nbarefields) / 2)
-        #    # self.xi_bilinear = backend.tile(first_bilinear, (1, num_repeat))
-        # logger.debug(self, f"xi_bilinear = {self.xi_bilinear[0:3, :]}")
+            # logger.debug(self, f"ENABLED CHEAT FOR MULTIPLE MODE DEBUGGING!")
+            # logger.debug(self, f"SAME AUXILIARY FIELD SAMPLE FOR ALL MODES!")
+            # self.xi_bilinear[:, :] = 0.0
 
         t1 = time.time()
         self.wt_random += t1 - t0
