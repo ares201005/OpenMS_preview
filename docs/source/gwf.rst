@@ -81,7 +81,7 @@ Private API
 
 .. automodule:: openms.gwf.ga_mband
    :member-order: bysource
-   :private-members: _compute_rdm, _compute_renormalizations, _compute_2body_renormalizations, _compute_Hqp, _compute_Hemb, _compute_lagrangian, _compute_gradient
+   :private-members: _compute_rdm, _compute_renormalizations, _compute_density_renormalizations, _compute_Hqp, _compute_Hemb, _compute_lagrangian, _compute_gradient
    :members:
    :undoc-members:
    :show-inheritance:

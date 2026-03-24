@@ -239,7 +239,7 @@ class FermionGASCF(ABC):
 
         return R
     
-    def _compute_2body_renormalizations(self, psiarr, n):
+    def _compute_density_renormalizations(self, psiarr, n):
         r"""
         Compute all 2-body (number-preserving) renormalization factors, given by
 
@@ -555,48 +555,32 @@ class FermionGASCF(ABC):
         result.pop("x")
 
         # compute 1-body correlations, then fix diagonal blocks
+        r"""
+        :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Jb} \ket{\Psi_G} = \sum_{cd} \left[ \mathcal{R}^I_{ac} \Delta^{IJ}_{cd} \mathcal{R}^{J*}_{bd} \right]`
+        for :math:`I \neq J`
+        """
         Rblock = scipy.linalg.block_diag(*R)
         expcorr = Rblock @ corr @ Rblock.T.conj()
         Cdict = {}
         for M in set(self.M):
             Cdict[M] = _get_annahilation_operators(M)
         for I in range(N):
-            psi = psiarr[I]
+            r"""
+            :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} \ket{\Psi_G} = \text{Tr} \left[ \phi_I^\dagger c^\dagger_a c_b \phi_I  \right]`
+            """
+            psi = get_psi_matrix(psiarr[I])
             M = self.M[I]
             C = Cdict[M]
             for a in range(M):
                 for b in range(M):
-                    expcorr[self._Moff[I]+a, self._Moff[I]+b] = psi.conj() @ np.kron(C[a].T @ C[b], np.eye(2**M)) @ psi
-            
-        # compute density-density correlations
-        # Wick's theorem is OK here since the quaspiarticle states are a single Slater determinant
-        T, Tsrc = self._compute_2body_renormalizations(psiarr, n)
-        Tn = []
-        for I in range(N):
-            Tn.append(np.einsum('aacc,c->a', T[I], n[I]))
-        narr = np.zeros((N,N), dtype=object)
-        for I in range(N):
-            for J in range(N):
-                ncorr =  np.zeros((self.M[I], self.M[J]), dtype=np.complex128)
-                if (I == J):
-                    psi = psiarr[I]
-                    M = self.M[I]
-                    C = Cdict[M]
-                    for a in range(M):
-                        for b in range(M):
-                            ncorr[a, b] = psi.conj() @ np.kron(C[a].T @ C[a] @ C[b].T @ C[b], np.eye(2**M)) @ psi
-                else:
-                    for a in range(self.M[I]):
-                        for b in range(self.M[J]):
-                            ncorr[a, b] = -np.trace(T[I][a,a].T @ self._get_block(corr, I, J) @ T[J][b,b].T @ self._get_block(corr, J, I))
-                    ncorr = ncorr + np.outer(np.diag(Tsrc[I]),Tn[J]) + np.outer(Tn[I], np.diag(Tsrc[J])) + np.outer(np.diag(Tsrc[I]), np.diag(Tsrc[J]))
+                    expcorr[self._Moff[I]+a, self._Moff[I]+b] = np.trace(psi.conj().T @ C[a].T @ C[b] @ psi)
 
-                narr[I, J] = ncorr
+        T, Tsrc = self._compute_density_renormalizations(psiarr, n)
 
-        return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec, result=result, corr=expcorr, narr=narr)
+        return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec, T=T, Tsrc=Tsrc, result=result, corr=expcorr)
     
 class FermionGASCFResult:
-    def __init__(self, Moff, Ne, E, psiarr, L, Lc, n, Ec, result=None, corr=None, narr=None):
+    def __init__(self, Moff, Ne, E, psiarr, L, Lc, n, Ec, T=None, Tsrc=None, result=None, corr=None):
         N = len(Moff) - 1
         self.N = N
         self.Ne = Ne
@@ -609,7 +593,14 @@ class FermionGASCFResult:
         self.Ec = Ec
         self.result = result
         self.corr = corr
-        self.narr = narr
+        self._number = (T is not None) and (Tsrc is not None)
+        if self._number:
+            self._T = T
+            self._Tsrc = Tsrc
+            TD = []
+            for I in range(N):
+                TD.append(np.einsum('abcc,c->ab', T[I], n[I]))
+            self._TD = TD
 
         projectors = []
         for I in range(N):
@@ -630,10 +621,42 @@ class FermionGASCFResult:
             return None
         return _get_block(self.corr, self._Moff, I, J)
     
+    def get_density_corr(self, I, J):
+        r"""
+        Return the matrix :math:`M_{abcd} = \bra{\Psi_G} c^\dagger_{Ia} c_{Ib} c^\dagger_{Jc} c_{Jd} \ket{\Psi_G}`.
+        """
+        if not self._number:
+            return None
+        MI = self._Moff[I+1]-self._Moff[I]
+        MJ = self._Moff[J+1]-self._Moff[J]
+        corr2 = np.zeros((MI, MI, MJ, MJ), dtype=np.complex128)
+        if (I == J):
+            r"""
+            :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} c^\dagger_{Ic} c_{Id} \ket{\Psi_G} = \text{Tr} \left[ \phi_I^\dagger c^\dagger_a c_b c^\dagger_c c_d \phi_I  \right]`
+            """
+            M = MI
+            psi = self.psiarr[I]
+            C = _get_annahilation_operators(M)
+            for a in range(M):
+                for b in range(M):
+                    for c in range(M):
+                        for d in range(M):
+                            corr2[a,b,c,d] = np.trace(psi.conj().T @ C[a].T @ C[b] @ C[c].T @ C[d] @ psi)
+
+        else:
+            r"""
+            :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} c^\dagger_{Jc} c_{Jd} \ket{\Psi_G} = \bra{\Psi_0^e} \left(\displaystyle\sum_{ef} \left[ \mathcal{T}^I_{ab,ef} f^\dagger_{Ie} f_{If} \right] + \mathcal{T}^I_{ab} \right) \left(\displaystyle\sum_{gh} \left[ \mathcal{T}^J_{cd,gh} f^\dagger_{Jg} f_{Jh} \right] + \mathcal{T}^J_{cd} \right) \ket{\Psi_0^e}`
+            Wick's theorem is OK here since the quaspiarticle states are a single Slater determinant.
+            """
+            corr2 = np.einsum('ab,cd->abcd', self._TD[I], self._TD[J])
+            corr2 += -np.einsum('abef,cdgh,gf,eh->abcd', self._T[I], self._T[J], self.get_1body_corr(J, I), self.get_1body_corr(I, J))
+            corr2 += np.einsum('ab,cd->abcd', self._TD[I], self._Tsrc[J])
+            corr2 += np.einsum('ab,cd->abcd', self._Tsrc[I], self._TD[J])
+
+        return corr2
+    
     def get_number_corr(self, I, J):
         r"""
         Return the matrix :math:`M_{ab} = \bra{\Psi_G} n_{Ia} n_{Jb} \ket{\Psi_G}` where :math:`n_{Ia} \equiv c^\dagger_{Ia} c_{Ia}`.
         """
-        if (self.narr is None):
-            return None
-        return self.narr[I, J]
+        return np.einsum('aabb->ab', self.get_density_corr(I, J)).real
