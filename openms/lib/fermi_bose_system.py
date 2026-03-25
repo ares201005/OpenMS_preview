@@ -130,23 +130,18 @@ class FermiBoseSystem:
     zpe             : float
         The zero-point energy shift, :math:`\sum_\alpha \omega_\alpha / 2`
 
-    Notes
-    -----
-    Inherits from lib.boson.Boson for reasons of compatibility:
-        code in openms.qmc checks whether the system is a Boson instance
-        to decide whether to do coupled fermion-boson quantum Monte Carlo.
     """
 
     def __init__(
         self,
         mol: PySCFMole,
         mf: HF | QEDHF | None,
-        freq_photon: np.ndarray | None,
+        freq_photon: np.ndarray | float | None,
         freq_phonon: np.ndarray | None,
         dim_fock_photon: int | None,
         dim_fock_phonon: int | None,
         coupling_photon: np.ndarray | None,
-        coupling_phonon: np.ndarray | None,
+        coupling_phonon: np.ndarray | float | None,
         wf_photon: np.ndarray | None,
         wf_phonon: np.ndarray | None,
         photon_gauge: str = "length",
@@ -213,10 +208,16 @@ class FermiBoseSystem:
             if dim_fock_phonon is not None:
                 self.dim_fock_phonon = dim_fock_phonon
             else:
-                raise ValueError("Phonon Fock space dimension not specified!")
+                logger.note(
+                    self, "Phonon Fock space dimension not specified: setting to 2."
+                )
+                self.dim_fock_phonon = 2
 
             if coupling_phonon is not None:
-                self.coupling_phonon = coupling_phonon
+                if isinstance(coupling_phonon, np.ndarray):
+                    self.coupling_phonon = coupling_phonon
+                elif isinstance(coupling_phonon, float) and mf is not None:
+                    self.coupling_phonon = coupling_phonon * np.eye(mol.nao_nr())
             else:
                 raise ValueError("Electron-phonon coupling not specified!")
         else:

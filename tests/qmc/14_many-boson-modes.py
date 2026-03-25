@@ -46,7 +46,7 @@ mf = scf.RHF(mol)
 E_hf = mf.kernel()
 
 # AFQMC parameters
-dt = 0.001
+dt = 0.05
 total_time = 10.0
 num_walkers = 100
 energy_scheme = "hybrid"

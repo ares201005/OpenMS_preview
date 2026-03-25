@@ -41,6 +41,7 @@ it means that the :math:`L` is effectively decomposed into :math:`X`
 import sys
 from abc import abstractmethod
 from pyscf import lo, scf, fci
+from pyscf import ao2mo
 from pyscf import tools as pyscftools
 from pyscf.gto import mole
 import numpy as backend
@@ -611,7 +612,7 @@ class QMCbase(object):
                 mol,
                 h1ao=hcore,
                 Xmat=Xmat,
-                eri=self.mf._eri,
+                eri=ao2mo.restore(1, self.mf._eri, mol.nao_nr()),
                 thresh=self.chol_thresh,
                 g=g_ptr,
                 block_decompose_eri=self.block_decompose_eri,
