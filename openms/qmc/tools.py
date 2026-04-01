@@ -388,7 +388,10 @@ def get_h1e_chols_cas(
 
     """
 
-    from pyscf import scf, lo
+    from pyscf import scf, lo, gto
+
+    if not isinstance(mol, gto.Mole):
+        raise ValueError("Requires pyscf object for mol")
 
     nao = mol.nao_nr()
     # Orthonormal AO (OAO) transform
@@ -582,9 +585,11 @@ def get_h1e_chols(
         The nuclear repulsion energy of the molecule.
 
     """
-    from pyscf import scf, lo
+    from pyscf import scf, lo, gto
 
     if Xmat is None:
+        if not isinstance(mol, gto.Mole):
+            raise ValueError("Supply overlap, or pass a pyscf Mole object.")
         overlap = mol.intor("int1e_ovlp")
         Xmat = lo.orth.lowdin(overlap)
     norb = Xmat.shape[0]

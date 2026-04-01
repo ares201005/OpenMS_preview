@@ -26,13 +26,13 @@ import ctypes
 import h5py
 
 import numpy
-from scipy.linalg import lapack
+from scipy.linalg import lapack, eigh
 from functools import reduce
 
 from threading import Thread
 from multiprocessing import Queue, Process
 
-from pyscf import lib # temporary
+from pyscf import lib  # temporary
 
 from openms.lib import backend
 from openms.lib import logger
@@ -43,6 +43,7 @@ DAVIDSON_LINDEP = getattr(__config__, "lib_linalg_helper_davidson_lindep", 1e-14
 DSOLVE_LINDEP = getattr(__config__, "lib_linalg_helper_dsolve_lindep", 1e-15)
 MAX_MEMORY = getattr(__config__, "lib_linalg_helper_davidson_max_memory", 2000)  # 2GB
 FOLLOW_STATE = getattr(__config__, "lib_linalg_helper_davidson_follow_state", False)
+
 
 def load_library(libname):
     r"""Load C, C++, Fortran libraries."""
@@ -60,12 +61,14 @@ def load_library(libname):
                         return numpy.ctypeslib.load_library(libname, libpath)
         raise
 
+
 # load bml lib (todo)
 # libbml = lib.load_library('libbml')
 
 # -------------------------
 # other math algorithms TBA
 # -------------------------
+
 
 def unitary_transform(U, A):
     r"""
@@ -124,11 +127,14 @@ def full_cholesky_decomposition(matrix, threshold):
 
     # DPSTRF computes the Cholesky factorization with complete pivoting
     # of a real symmetric positive semidefinite matrix.
-    cholesky_vectors, pivots, n_vectors, info = \
-    lapack.dpstrf(cholesky_vectors, lower=1, tol=threshold)
+    cholesky_vectors, pivots, n_vectors, info = lapack.dpstrf(
+        cholesky_vectors, lower=1, tol=threshold
+    )
 
     if info < 0:
-        raise ValueError('Cholesky decomposition failed! Something wrong in call to dpstrf.')
+        raise ValueError(
+            "Cholesky decomposition failed! Something wrong in call to dpstrf."
+        )
 
     # Zero upper unreferenced triangle
     for i in range(dim_):
@@ -182,9 +188,12 @@ def full_cholesky_orth(S, threshold=1.0e-7):
 
     cholesky_vectors, pivots, n_oao = full_cholesky_decomposition(S, threshold)
 
-    if (n_oao > n or n_oao <= 0 or
-        any(p > n for p in pivots) or
-        any(p <= 0 for p in pivots)):
+    if (
+        n_oao > n
+        or n_oao <= 0
+        or any(p > n for p in pivots)
+        or any(p <= 0 for p in pivots)
+    ):
 
         print("Something went wrong when decomposing the AO overlap.")
         print("Did you compile with the wrong type of integers in setup?")
@@ -203,3 +212,15 @@ def full_cholesky_orth(S, threshold=1.0e-7):
         P[pivots[i] - 1, i] = 1.0
 
     return L, P
+
+
+def loewdin_orth(S: numpy.ndarray) -> numpy.ndarray:
+    r"""Lowdin orthogonalization of matrix S. Modified from pyscf.lo.orth.lowdin(),
+    by Qiming Sun.
+    """
+    vals, vecs = eigh(S)
+    index = vals > SAFE_EIGH_LINDEP
+
+    return backend.dot(
+        vecs[:, index] / backend.sqrt(vals[index]), vecs[:, index].conj().T
+    )

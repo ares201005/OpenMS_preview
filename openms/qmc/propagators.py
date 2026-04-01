@@ -1437,58 +1437,58 @@ class PhaselessElecBoson(Phaseless):
     #    # print("photon energy, bilinear term are ", eb, ep)
     #    return eng_e + eb + ep
 
-    @deprecated
-    def propagate_walkers_twobody_1st(self, walkers, trial):
-        r"""Propagate by potential term using discrete HS transform."""
-        # Construct random auxilliary field.
-        nalpha = delta = self.delta
-        nup = system.nup
-        soffset = walkers.phiw.shape[0] - system.nbasis
-        for i in range(0, system.nbasis):
-            self.update_greens_function(walker, trial, i, nup)
+    # @deprecated
+    # def propagate_walkers_twobody_1st(self, walkers, trial):
+    #    r"""Propagate by potential term using discrete HS transform."""
+    #    # Construct random auxilliary field.
+    #    nalpha = delta = self.delta
+    #    nup = system.nup
+    #    soffset = walkers.phiw.shape[0] - system.nbasis
+    #    for i in range(0, system.nbasis):
+    #        self.update_greens_function(walker, trial, i, nup)
 
-            # TODO: Ratio of determinants for the two choices of auxilliary fields
-            # probs = calculate_overlap_ratio(walker, delta, trial, i)
+    #        # TODO: Ratio of determinants for the two choices of auxilliary fields
+    #        # probs = calculate_overlap_ratio(walker, delta, trial, i)
 
-            if self.charge:
-                probs *= self.charge_factor
+    #        if self.charge:
+    #            probs *= self.charge_factor
 
-            if False:
-                const = (
-                    -self.gamma
-                    * system.g
-                    * math.sqrt(2.0 * system.m * system.w0)
-                    / system.U
-                    * walker.X[i]
-                )
-                factor = backend.array([backend.exp(const), backend.exp(-const)])
-                probs *= factor
+    #        if False:
+    #            const = (
+    #                -self.gamma
+    #                * system.g
+    #                * math.sqrt(2.0 * system.m * system.w0)
+    #                / system.U
+    #                * walker.X[i]
+    #            )
+    #            factor = backend.array([backend.exp(const), backend.exp(-const)])
+    #            probs *= factor
 
-            # issues here with complex numbers?
-            phaseless_ratio = backend.maximum(probs.real, [0, 0])
-            norm = sum(phaseless_ratio)
-            r = backend.random.random()
+    #        # issues here with complex numbers?
+    #        phaseless_ratio = backend.maximum(probs.real, [0, 0])
+    #        norm = sum(phaseless_ratio)
+    #        r = backend.random.random()
 
-            # Is this necessary?
-            # todo : mirror correction
-            if norm > 0:
-                walker.weight = walker.weight * norm
-                if r < phaseless_ratio[0] / norm:
-                    xi = 0
-                else:
-                    xi = 1
-                vtup = walkers.phiw[i, :nup] * delta[xi, 0]
-                vtdown = walkers.phiw[i + soffset, nup:] * delta[xi, 1]
-                walkers.phiw[i, :nup] = walkers.phiw[i, :nup] + vtup
-                walkers.phiw[i + soffset, nup:] = (
-                    walkers.phiw[i + soffset, nup:] + vtdown
-                )
-                walker.update_overlap(probs, xi, trial.coeffs)
-                if walker.field_configs is not None:
-                    walker.field_configs.push(xi)
-                walker.update_inverse_overlap(trial, vtup, vtdown, i)
-            else:
-                walker.weight = 0
+    #        # Is this necessary?
+    #        # todo : mirror correction
+    #        if norm > 0:
+    #            walker.weight = walker.weight * norm
+    #            if r < phaseless_ratio[0] / norm:
+    #                xi = 0
+    #            else:
+    #                xi = 1
+    #            vtup = walkers.phiw[i, :nup] * delta[xi, 0]
+    #            vtdown = walkers.phiw[i + soffset, nup:] * delta[xi, 1]
+    #            walkers.phiw[i, :nup] = walkers.phiw[i, :nup] + vtup
+    #            walkers.phiw[i + soffset, nup:] = (
+    #                walkers.phiw[i + soffset, nup:] + vtdown
+    #            )
+    #            walker.update_overlap(probs, xi, trial.coeffs)
+    #            if walker.field_configs is not None:
+    #                walker.field_configs.push(xi)
+    #            walker.update_inverse_overlap(trial, vtup, vtdown, i)
+    #        else:
+    #            walker.weight = 0
 
     def propagate_walkers_onebody(self, walkers):  # walker, system, trial, dt):
         r"""Propgate one-body term:
@@ -1553,44 +1553,44 @@ class PhaselessElecBoson(Phaseless):
 
         # 2) oei_qed in 1st quantization (TBA)
 
-        """
-        Qalpha = backend.ones(nmode)
+        #
+        # Qalpha = backend.ones(nmode)
 
-        if not False:
-            # Tr_Q [D * Q], traceout bosonic DOF
-            const = gmat * cmath.sqrt(system.mass * system.freq * 2.0) * dt
-            const = const.real
-            Qso = [walkers.Q, walkers.Q]
+        # if not False:
+        #    # Tr_Q [D * Q], traceout bosonic DOF
+        #    const = gmat * cmath.sqrt(system.mass * system.freq * 2.0) * dt
+        #    const = const.real
+        #    Qso = [walkers.Q, walkers.Q]
 
-            gmat = backend.zeros_like(h1e)
+        #    gmat = backend.zeros_like(h1e)
 
-            # update effective oei
-            oei = h1e + gmat * const
+        #    # update effective oei
+        #    oei = h1e + gmat * const
 
-            # Veph = [backend.diag( backend.exp(const * Qso[0]) ),backend.diag( backend.exp(const * Qso[1]) )]
-            # propagate_effective_oei(walkers.phiw, system, Veph, H1diag=True)
-            exp_h1e = [scipy.linalg.expm(-dt * oei[0]), scipy.linalg.expm(-dt * oei[1])]
-            # print(walkers.phiw.dtype, walker.X.dtype, const)
-            propagate_walkers_one_body(walkers.phiw, exp_h1e)
-            # propagate_effective_oei(walkers.phiw, system, TV, H1diag=False)
+        #    # Veph = [backend.diag( backend.exp(const * Qso[0]) ),backend.diag( backend.exp(const * Qso[1]) )]
+        #    # propagate_effective_oei(walkers.phiw, system, Veph, H1diag=True)
+        #    exp_h1e = [scipy.linalg.expm(-dt * oei[0]), scipy.linalg.expm(-dt * oei[1])]
+        #    # print(walkers.phiw.dtype, walker.X.dtype, const)
+        #    propagate_walkers_one_body(walkers.phiw, exp_h1e)
+        #    # propagate_effective_oei(walkers.phiw, system, TV, H1diag=False)
 
-        # Update inverse overlap
-        walker.inverse_overlap(trial)
-        # Update walker weight
-        ot_new = walker.calc_otrial(trial)
+        ## Update inverse overlap
+        # walker.inverse_overlap(trial)
+        ## Update walker weight
+        # ot_new = walker.calc_otrial(trial)
 
-        ratio = ot_new / walker.ot
-        phase = cmath.phase(ratio)
+        # ratio = ot_new / walker.ot
+        # phase = cmath.phase(ratio)
 
-        if abs(phase) < 0.5 * math.pi:
-            (magn, phase) = cmath.polar(ratio)
-            cosine_fac = max(0, math.cos(phase))
-            walker.weight *= magn * cosine_fac
-            walker.ot = ot_new
-        else:
-            walker.ot = ot_new
-            walker.weight = 0.0
-        """
+        # if abs(phase) < 0.5 * math.pi:
+        #    (magn, phase) = cmath.polar(ratio)
+        #    cosine_fac = max(0, math.cos(phase))
+        #    walker.weight *= magn * cosine_fac
+        #    walker.ot = ot_new
+        # else:
+        #    walker.ot = ot_new
+        #    walker.weight = 0.0
+        #
 
         t0 = time.time()
         if not self.turnoff_bosons:

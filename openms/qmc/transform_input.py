@@ -18,61 +18,258 @@
 # Last modified:    2026-03-19
 
 import numpy as np
-from scipy.linalg import svd
-from dataclasses import dataclass
 from pyscf.gto import Mole as Mol
 from pyscf.scf.hf import RHF as HF
-from pyscf.lo.orth import lowdin
 from openms.mqed.qedhf import RHF as QEDHF
+
+from scipy.linalg import svd
+from openms.lib.mathlib import loewdin_orth  # from pyscf.lo.orth import lowdin
 from openms.qmc.tools import bilinear_decomposition
 
 
-@dataclass
-class AFQMCInput:
-    r"""Input transformed for AFQMC.
-    Note that this class doesn't do any processing; for example,
-    the one- and two-electron integrals should already be shifted by the
-    dipole self-energy.
+class AFQMCSystem:
+    r"""System transformed for input to AFQMC.
+    Note that this class doesn't do any processing: for instance,
+    * in cavity QED systems, the one- and two-electron integrals should already
+      be shifted by the dipole self-energy;
+    * the electron repulsion integrals and bilinear tensors should already be
+      decomposed into L_gamma^2 form.
 
-    Assumes the form gmat[i, :, :] * (a^+[i] + a[i]) for mode i's
-    bilinear coupling: that is, the electronic operator gmat couples to the
-    boson displacement operator, and all constants (such as the cavity QED
-    sqrt(omega[i]/2)) are included in gmat.
+    The goal is for this to act as a drop-in replacement for QMCbase.system,
+    which is currently an extended pyscf.gto.Mole or openms.lib.Boson object.
 
-    Attributes
+    In coupled fermion-boson systems, we currently assume the form
+    gmat[i, :, :] * (a^+[i] + a[i]) for mode i's bilinear coupling:
+    that is, the electronic operator gmat couples to boson displacement,
+    and all constants (like sqrt(omega[i]/2) in cavity QED) are in gmat.
+
+    Since we also replace openms.qmc.QMCbase.get_integrals(), there are also
+    some attributes from openms.qmc.QMCbase that are replicated here.
+
+    Parameters
     ----------
     n_ao: int
         The number of orbitals/basis functions for the electronic part.
-    h_1e : np.ndarray
-        The one-electron integrals; h_1e.shape = (n_ao, n_ao)
-    h_2e : np.ndarray
-        The two-electron integrals; h_2e.shape = (n_ao, n_ao, n_ao, n_ao)
+    h1e : np.ndarray
+        The one-electron integrals; h1e.shape = (nspin, n_ao, n_ao)
+    ltensor : np.ndarray
+        The two-electron integrals and (electronic part of the) bilinear/DSE
+        terms, in the QMC decomposed form; ltensor.shape = (nchol, nao, nao)
+    ovlp : np.ndarray
+        The electronic overlap matrix; ovlp.shape = (n_ao, n_ao)
     elec_wf : np.ndarray
         The electronic trial wavefunction; elec_wf.shape = (n_ao, )
-    nmode : int (Optional)
+    nelectron : int
+        The total number of electrons.
+    spin : int
+        The total spin, equal to nelec[0] - nelec[1].
+    nelec : list[int] (Optional)
+        The number of [alpha, beta] electrons.
+    nuc_energy : float
+        The (constant) electron-nuclear energy.
+    nmodes : int (Optional)
         The number of boson modes.
     dim_fock : int (Optional)
         The dimension of the Fock space for each boson mode.
-    gmat : np.ndarray (Optional)
-        The electron-boson bilinear coupling matrix.
-        gmat.shape = (nmode, n_ao, n_ao)
     boson_freq : np.ndarray (Optional)
         The boson frequencies. boson_freq.shape = (nmode,)
     boson_wf : np.ndarary (Optional)
         The bosons' trial wavefunction; boson_wf.shape = (nmode, dim_fock)
+    verbose : int
+        Flag for verbosity (1 is lowest; 5 for debugging)
+    stdout : int
+        The standard output buffer. (Used by openms.qmc.{trial, generic_walkers}.)
+
+    Fermionic attributes
+    ----------
+    n_ao: int
+        The number of orbitals/basis functions for the electronic part.
+        (Parameter passed through unchanged.)
+    h1e : np.ndarray
+        The one-electron integrals; h1e.shape = (nspin, n_ao, n_ao)
+        (Parameter passed through unchanged.)
+    ltensor : np.ndarray
+        The two-electron integrals and (electronic part of the) bilinear/DSE
+        terms, in the QMC decomposed form; ltensor.shape = (nchol, nao, nao)
+        (Parameter passed through unchanged.)
+    ovlp : np.ndarray
+        The electronic overlap matrix; ovlp.shape = (n_ao, n_ao)
+        (Parameter passed through unchanged.)
+    elec_wf : np.ndarray
+        The electronic trial wavefunction; elec_wf.shape = (n_ao, )
+        (Parameter passed through unchanged.)
+    nelectron : int
+        The total number of electrons.
+        (Parameter passed through unchanged.)
+    spin : int
+        The total spin, equal to nelec[0] - nelec[1].
+        (Parameter passed through unchanged.)
+    nelec : list[int] (Optional)
+        The number of [alpha, beta] electrons. Computed if not provided.
+    nuc_energy : float
+        The (constant) electron-nuclear energy.
+
+    Bosonic attributes
+    ------------------
+    nmodes : int (Optional)
+        The number of boson modes.
+        (Parameter passed through unchanged.)
+    dim_fock : int (Optional)
+        The dimension of the Fock space for each boson mode.
+        (Parameter passed through unchanged.)
+    nboson_states : int (Optional)
+        The total size of the boson degrees of freedom, dim_fock * nmodes.
+        Should be DEPRECATED.
+    boson_freq : np.ndarray (Optional)
+        The boson frequencies. boson_freq.shape = (nmode,)
+        (Parameter passed through unchanged.)
+    boson_wf : np.ndarary (Optional)
+        The bosons' trial wavefunction; boson_wf.shape = (nmode, dim_fock)
+        (Parameter passed through unchanged.)
+
+    General attributes
+    ------------------
+    verbose : int
+        Flag for verbosity (1 is lowest; 5 for debugging)
+        (Parameter passed through unchanged.)
+    stdout : int
+        The standard output buffer. (Used by openms.qmc.{trial, generic_walkers}.)
+        (Parameter passed through unchanged.)
+
+    Methods
+    -------
+    nao_nr(): None -> int
+        The number of electronic orbitals/basis functions as a function
+        (matches pyscf syntax).
+    energy_nuc(): None -> float
+        The nuclear energy (matches pyscf syntax)
+
 
     """
 
-    n_ao: int
-    h_1e: np.ndarray
-    h_2e: np.ndarray
-    ovlp: np.ndarray
-    elec_wf: np.ndarray
-    nmode: int | None = None
-    dim_fock: int | None = None
-    gmat: np.ndarray | None = None
-    boson_freq: np.ndarray | None = None
-    boson_wf: np.ndarray | None = None
+    def __init__(
+        self,
+        n_ao: int,
+        h1e: np.ndarray,
+        ltensor: np.ndarray,
+        ovlp: np.ndarray,
+        elec_wf: np.ndarray,
+        nelectron: int,
+        spin: int = 0,
+        nelec: list[int] | None = None,
+        nuc_energy: float = 0.0,
+        nmodes: int | None = None,
+        dim_fock: int | None = None,
+        boson_freq: np.ndarray | None = None,
+        boson_wf: np.ndarray | None = None,
+        verbose: int = 3,
+        stdout: int = 1,
+    ):
+        # Electron quantities
+        self.n_ao = n_ao
+        self.h1e = h1e
+        self.ltensor = ltensor
+        self.ovlp = ovlp
+        self.elec_wf = elec_wf
+        self.nelectron = nelectron
+        self.spin = spin
+        if nelec is None:
+            self.nelec[0] = (self.nelectron + self.spin) // 2
+            self.nelec[1] = self.nelectron - self.nelec[0]
+        else:
+            self.nelec = nelec
+
+        self.nuc = nuc_energy
+
+        # Methods (to replicate pyscf syntax. TODO: deprecate)
+        self.nao_nr = lambda *args: n_ao
+        self.energy_nuc = lambda *args: nuc_energy
+
+        # Boson quantities
+        self.nmodes = nmodes
+        self.dim_fock = dim_fock
+        self.nboson_states = self.nmodes * self.dim_fock
+        self.boson_freq = boson_freq
+        self.boson_wf = boson_wf
+
+        # General quantities
+        self.verbose = verbose
+        self.stdout = stdout
+
+    def intor(self, which: str = "int1e_ovlp") -> np.ndarray:
+        if which.lower() != "int1e_ovlp":
+            raise NotImplementedError("Only overlap implemented for now")
+        return self.ovlp
+
+
+class QMCMeanField:
+    r"""Mostly a dataclass for passing electronic mean-field properties to QMC.
+    Templated from PySCF's scf.hf.RHF object.
+
+    Parameters
+    ----------
+    h1e : np.ndarray
+        The one-electron Hamiltonian after dressing; h1e.shape = (n_ao, n_ao)
+    ovlp : np.ndarray
+        The atomic orbital overlap matrix; ovlp.shape = (n_ao, n_ao)
+    mo_coeff : np.ndarray
+        The molecular orbital coefficients; mo_coeff.shape = (nspin, n_ao, n_ao)
+    mo_occ : np.ndarray
+        The occupations of the molecular orbitals; mo_occ.shape = (nspin, n_ao)
+    _eri : np.ndarray
+        The electron repulsion integrals; _eri.shape = (n_ao, n_ao, n_ao, n_ao)
+    E_mf : float
+        The mean-field energy, computed previously.
+
+    Attributes
+    ----------
+    h1e : np.ndarray
+        The one-electron Hamiltonian after dressing; h1e.shape = (n_ao, n_ao)
+    ovlp : np.ndarray
+        The atomic orbital overlap matrix; ovlp.shape = (n_ao, n_ao)
+    mo_coeff : np.ndarray
+        The molecular orbital coefficients; mo_coeff.shape = (nspin, n_ao, n_ao)
+    mo_occ : np.ndarray
+        The occupations of the molecular orbitals; mo_occ.shape = (nspin, n_ao)
+    _eri : np.ndarray
+        The electron repulsion integrals; _eri.shape = (n_ao, n_ao, n_ao, n_ao)
+    E_mf : float
+        The mean-field energy, computed previously.
+
+    Methods
+    -------
+    get_hcore(): None -> np.ndarray = h1e
+    get_ovlp(): None -> np.ndarray = ovlp
+    kernel(): None -> float = E_mf
+    """
+
+    def __init__(
+        self,
+        h1e: np.ndarray,
+        ovlp: np.ndarray,
+        mo_coeff: np.ndarray,
+        mo_occ: np.ndarray,
+        eri: np.ndarray,
+        E_mf: float = 0.0,
+    ):
+        self.h1e = h1e
+        self.ovlp = ovlp
+        self.mo_coeff = mo_coeff
+        self.mo_occ = mo_occ
+        self._eri = eri
+        self.E_mf = E_mf
+
+    def get_hcore(self) -> np.ndarray:
+        r"""To be deprecated. Returns one-electron Hamiltonian."""
+        return self.h1e
+
+    def get_ovlp(self) -> np.ndarray:
+        r"""To be deprecated. Returns overlap matrix."""
+        return self.ovlp
+
+    def kernel(self) -> float:
+        r"""To be deprecated. Returns (but DOES NOT compute) the mean-field energy."""
+        return self.E_mf
 
 
 def orth_overlap(S: np.ndarray, oao: str = "oao") -> np.ndarray:
@@ -98,7 +295,7 @@ def orth_overlap(S: np.ndarray, oao: str = "oao") -> np.ndarray:
         The MO coefficient matrix (unchanged),
         or the Loewdin orthogonalization of the AO overlap matrix.
     """
-    return lowdin(S) if oao.lower() == "oao" else S
+    return loewdin_orth(S) if oao.lower() == "oao" else S
 
 
 def dress_h1e_photon(
@@ -166,6 +363,10 @@ def decompose_tensor_eri(
         The electron repulsion integrals; eri.shape = (nao, nao, nao, nao)
     S : np.ndarray
         The orthogonalization matrix; S.shape = (nao, nao)
+    thresh : float
+        The SVD threshold; discard singular values < thresh.
+    lambda_dot_mu : np.ndarray (Optional)
+        If present, add the DSE terms into the electron repulsion integrals.
 
     Returns
     -------
@@ -231,7 +432,7 @@ def decompose_tensor_dse(
 
 def decompose_tensor_bilinear(
     g_bil: np.ndarray, S: np.ndarray, scheme: int = 2
-) -> tuple[np.ndarray, int]:
+) -> tuple[list[np.ndarray], int]:
     r"""Return the Cholesky tensors for the (photonic and phononic)
     bilinear coupling terms, in the orthogonalized basis.
 
@@ -267,6 +468,11 @@ def decompose_tensor_bilinear(
     n_bil : int
         The number of bilinear tensors so generated.
     """
+
+    if scheme != 1 or scheme != 2:
+        raise ValueError(
+            "Only bilinear decomposition schemes 1 (threefold) and 2 (twofold) are supported."
+        )
 
     nmode = g_bil.shape[0]
     Afac = np.ones((nmode,))  # factors are within g_bil already
@@ -331,14 +537,16 @@ def combine_boson(
     return omega, g_bilinear, dim_fock
 
 
-def holstein_phonon_nocavity(
+def holstein_coupling(
     rdm1: np.ndarray,
     g: float | np.ndarray,
     omega: float | np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     r"""
-    Couple an electronic mean-field calculation mf to Holstein phonons for AFQMC.
-    TODO: Add support for a photonic cavity as well.
+    From a one-electron reduced density matrix,
+    boson frequency (or frequencies) omega, and coupling constant(s) g,
+    return the frequencies as an array and the bilinear coupling matrix
+    (g_i * n_i).
 
     Parameters
     ----------

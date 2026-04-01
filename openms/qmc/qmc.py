@@ -61,6 +61,7 @@ from openms.lib import logger, deprecated
 from openms.lib.logger import task_title
 from openms.lib.boson import Boson
 from openms.qmc.trial import make_trial, multiCI
+from openms.qmc.transform_input import AFQMCSystem, QMCMeanField
 from openms.qmc.estimators import local_eng_elec_chol
 from openms.qmc.estimators import local_eng_elec_chol_new
 from openms.qmc.propagators import Phaseless, PhaselessElecBoson
@@ -285,13 +286,12 @@ class QMCbase(object):
 
         self.geb = None  # TODO: optimize the handling of geb
         self.fbinteraction = False  # whether this is fermion-boson mixture
-        if not isinstance(
-            self.system, Boson
-        ):  # only check boson_freq is system itself not a boson object
+        if not (isinstance(self.system, Boson) or isinstance(self.system, AFQMCSystem)):
+            # only check boson_freq if system is not a Boson or AFQMCSystem object
             boson_freq = kwargs.get("boson_freq", None)
             if boson_freq is not None:
-                self.system.boson_freq = boson_freq
-                self.system.nmodes = len(self.system.boson_freq)
+                self.system.boson_freq = backend.array(boson_freq)
+                self.system.nmodes = self.system.boson_freq.shape[0]
                 nphoton = kwargs.get("nphoton", 3)
                 self.system.gmat = kwargs.get("gmat", None)
                 self.system.nboson_states = [nphoton for i in range(self.system.nmodes)]
@@ -299,7 +299,11 @@ class QMCbase(object):
                 # print("boson_freq = ", self.system.boson_freq.shape, self.system.boson_freq)
                 # print("gmat = ", self.system.gmat)
                 self.fbinteraction = True
+        elif isinstance(self.system, AFQMCSystem):
+            if self.system.boson_freq is not None:
+                self.fbinteraction = True
         else:
+            # if self.system is a Boson object, we have a QEDHF system
             self.fbinteraction = True
 
         # propagator params
@@ -448,7 +452,10 @@ class QMCbase(object):
         # 2) make h1e in Spin orbital
         t0 = time.time()
         logger.note(self, task_title("Get integrals"))
-        if self.integrals_func is not None:
+        if isinstance(self.system, AFQMCSystem):
+            self.h1e = self.system.h1e
+            self.ltensor = self.system.ltensor
+        elif self.integrals_func is not None:
             self.h1e, self.ltensor = self.integrals_func()
         else:
             self.h1e, self.ltensor = self.get_integrals()
