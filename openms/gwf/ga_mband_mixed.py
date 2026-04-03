@@ -380,7 +380,7 @@ class FermionGASCF(ABC):
         Lmix = -sum(np.trace((L[I] + Lc[I]) @ np.diag(n[I])) for I in range(N))
         Lag += Lmix + Lmix.conj()
 
-        return Lag
+        return Lag.real
 
     def _compute_gradient(self, x):
         r"""
@@ -520,7 +520,7 @@ class FermionGASCF(ABC):
         Ec = np.zeros(N)
         return self._pack_vector(psiarr, L, Lc, narr, Ec)
 
-    def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, verbose=True):
+    def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, x=False, verbose=True):
         r"""
         Use root finding (via scipy.optimize.root) on the gradient to calculate the ground state via Newton's method
 
@@ -534,7 +534,7 @@ class FermionGASCF(ABC):
         """
         # create initial guess and solve
         N = self.N
-        if (x0 == None):
+        if (x0 is None):
             x0 = self._get_initial_guess()
         options = {}
         if maxiter:
@@ -552,7 +552,6 @@ class FermionGASCF(ABC):
         occ = [(i < self.Ne) for i in range(self._Moff[-1])]
         corr = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
         E = self._compute_lagrangian(result.x)
-        result.pop("x")
 
         # compute 1-body correlations, then fix diagonal blocks
         r"""
@@ -623,7 +622,7 @@ class FermionGASCFResult:
     
     def get_density_corr(self, I, J):
         r"""
-        Return the matrix :math:`M_{abcd} = \bra{\Psi_G} c^\dagger_{Ia} c_{Ib} c^\dagger_{Jc} c_{Jd} \ket{\Psi_G}`.
+        Return the tensor :math:`M_{abcd} = \bra{\Psi_G} c^\dagger_{Ia} c_{Ib} c^\dagger_{Jc} c_{Jd} \ket{\Psi_G}`.
         """
         if not self._number:
             return None

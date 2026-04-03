@@ -104,6 +104,7 @@ class FermiHubbard(FermionGASCF):
         qN, N = self._charge_structure_factor(res)
 
         plt.figure()
+        plt.title(self.msg)
         plt.plot(qS, S, label="Spin structure factor S(q)")
         plt.plot(qN, N, label="Charge structure factor N(q)")
         plt.xlabel("q")
