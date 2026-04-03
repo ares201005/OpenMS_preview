@@ -455,9 +455,17 @@ class QMCbase(object):
         if isinstance(self.system, AFQMCSystem):
             self.h1e = self.system.h1e
             self.ltensor = self.system.ltensor
+            self.nbarefields = self.system.nbarefields
+            self.nfields = self.system.nfields
+            if self.fbinteraction:
+                self.geb = self.system.geb
+                self.chol_bilinear = self.system.chol_bilinear
+                self.chol_bilinear_e = self.chol_bilinear[0]
+            # Note: chol_bilinear_e is also included in ltensor
         elif self.integrals_func is not None:
             self.h1e, self.ltensor = self.integrals_func()
         else:
+            # get_integrals() also sets geb, nbarefields, nfields, chol_bilinear(_e)
             self.h1e, self.ltensor = self.get_integrals()
 
         # half-rotate integrals

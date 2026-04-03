@@ -20,6 +20,7 @@
 import numpy as np
 from pyscf.gto import Mole as Mol
 from pyscf.scf.hf import RHF as HF
+from openms.lib.boson import Boson
 from openms.mqed.qedhf import RHF as QEDHF
 
 from scipy.linalg import svd
@@ -46,6 +47,10 @@ class AFQMCSystem:
     Since we also replace openms.qmc.QMCbase.get_integrals(), there are also
     some attributes from openms.qmc.QMCbase that are replicated here.
 
+    TODO: Consider whether to include elec_wf, boson_wf here, in QMCMeanField,
+    or compute in openms.qmc.trial.py (as currently done). At the momemnt,
+    stick with the current implementation.
+
     Parameters
     ----------
     n_ao: int
@@ -55,10 +60,13 @@ class AFQMCSystem:
     ltensor : np.ndarray
         The two-electron integrals and (electronic part of the) bilinear/DSE
         terms, in the QMC decomposed form; ltensor.shape = (nchol, nao, nao)
+    nbarefields : int
+        The number of electron-only auxiliary fields required
+        (includes dipole self-energy if present).
+    nfields : int
+        The total number of auxiliary fields: nbarefields + n_bilinear_fields
     ovlp : np.ndarray
         The electronic overlap matrix; ovlp.shape = (n_ao, n_ao)
-    elec_wf : np.ndarray
-        The electronic trial wavefunction; elec_wf.shape = (n_ao, )
     nelectron : int
         The total number of electrons.
     spin : int
@@ -73,8 +81,6 @@ class AFQMCSystem:
         The dimension of the Fock space for each boson mode.
     boson_freq : np.ndarray (Optional)
         The boson frequencies. boson_freq.shape = (nmode,)
-    boson_wf : np.ndarary (Optional)
-        The bosons' trial wavefunction; boson_wf.shape = (nmode, dim_fock)
     verbose : int
         Flag for verbosity (1 is lowest; 5 for debugging)
     stdout : int
@@ -88,15 +94,12 @@ class AFQMCSystem:
     h1e : np.ndarray
         The one-electron integrals; h1e.shape = (nspin, n_ao, n_ao)
         (Parameter passed through unchanged.)
-    ltensor : np.ndarray
-        The two-electron integrals and (electronic part of the) bilinear/DSE
-        terms, in the QMC decomposed form; ltensor.shape = (nchol, nao, nao)
-        (Parameter passed through unchanged.)
     ovlp : np.ndarray
         The electronic overlap matrix; ovlp.shape = (n_ao, n_ao)
         (Parameter passed through unchanged.)
-    elec_wf : np.ndarray
-        The electronic trial wavefunction; elec_wf.shape = (n_ao, )
+    ltensor : np.ndarray
+        The two-electron integrals and (electronic part of the) bilinear/DSE
+        terms, in the QMC decomposed form; ltensor.shape = (nchol, nao, nao)
         (Parameter passed through unchanged.)
     nelectron : int
         The total number of electrons.
@@ -109,26 +112,42 @@ class AFQMCSystem:
     nuc_energy : float
         The (constant) electron-nuclear energy.
 
-    Bosonic attributes
-    ------------------
-    nmodes : int (Optional)
+    Bosonic attributes (Optional)
+    -----------------------------
+    nmodes : int
         The number of boson modes.
         (Parameter passed through unchanged.)
-    dim_fock : int (Optional)
+    dim_fock : int
         The dimension of the Fock space for each boson mode.
         (Parameter passed through unchanged.)
-    nboson_states : int (Optional)
+    nboson_states : int
         The total size of the boson degrees of freedom, dim_fock * nmodes.
         Should be DEPRECATED.
-    boson_freq : np.ndarray (Optional)
+    boson_freq : np.ndarray
         The boson frequencies. boson_freq.shape = (nmode,)
         (Parameter passed through unchanged.)
-    boson_wf : np.ndarary (Optional)
-        The bosons' trial wavefunction; boson_wf.shape = (nmode, dim_fock)
+    geb : np.ndarray
+        The electronic part of the bilinear (electron-boson) coupling matrix,
+        including all necessary coefficients, before decomposition into chol_bilinear.
+        That is, H_bilinear = \sum_a^{modes} geb[a, :, :] * Q_a[:, :],
+        where Q_a is the bosonic displacement operator for mode a.
+        geb.shape = (nmodes, n_ao, n_ao).
+        (Parameter passed through unchanged.)
+    chol_bilinear : list[np.ndarray]
+        The bilinear tensors: [chol_bilinear_e, chol_bilinear_b].
+        chol_bilinear_e.shape = (n_fields_bilinear, nao, nao);
+        chol_bilinear_b.shape = (n_fields_bilinear).
+        That is, chol_bilinear_b is just an array of coefficients; the actual operators,
+        which are currently assumed to be displacement operators, are computed on-the-fly
+        inside the AFQMC routines.
         (Parameter passed through unchanged.)
 
     General attributes
     ------------------
+    nbarefields : int
+        The number of electron-only Cholesky tensors (includes dipole self-energy if present).
+    nfields : int
+        The total number of auxiliary fields: nbarefields + n_bilinear_fields
     verbose : int
         Flag for verbosity (1 is lowest; 5 for debugging)
         (Parameter passed through unchanged.)
@@ -143,17 +162,16 @@ class AFQMCSystem:
         (matches pyscf syntax).
     energy_nuc(): None -> float
         The nuclear energy (matches pyscf syntax)
-
-
     """
 
     def __init__(
         self,
         n_ao: int,
         h1e: np.ndarray,
-        ltensor: np.ndarray,
         ovlp: np.ndarray,
-        elec_wf: np.ndarray,
+        ltensor: np.ndarray,
+        nbarefields: int,
+        nfields: int,
         nelectron: int,
         spin: int = 0,
         nelec: list[int] | None = None,
@@ -161,16 +179,18 @@ class AFQMCSystem:
         nmodes: int | None = None,
         dim_fock: int | None = None,
         boson_freq: np.ndarray | None = None,
-        boson_wf: np.ndarray | None = None,
+        chol_bilinear: list[np.ndarray] | None = None,
+        geb: np.ndarray | None = None,
         verbose: int = 3,
         stdout: int = 1,
     ):
         # Electron quantities
         self.n_ao = n_ao
         self.h1e = h1e
-        self.ltensor = ltensor
         self.ovlp = ovlp
-        self.elec_wf = elec_wf
+        self.ltensor = ltensor
+        self.nbarefields = nbarefields
+        self.nfields = nfields
         self.nelectron = nelectron
         self.spin = spin
         if nelec is None:
@@ -190,7 +210,8 @@ class AFQMCSystem:
         self.dim_fock = dim_fock
         self.nboson_states = self.nmodes * self.dim_fock
         self.boson_freq = boson_freq
-        self.boson_wf = boson_wf
+        self.chol_bilinear = chol_bilinear
+        self.geb = geb
 
         # General quantities
         self.verbose = verbose
@@ -213,7 +234,7 @@ class QMCMeanField:
     ovlp : np.ndarray
         The atomic orbital overlap matrix; ovlp.shape = (n_ao, n_ao)
     mo_coeff : np.ndarray
-        The molecular orbital coefficients; mo_coeff.shape = (nspin, n_ao, n_ao)
+        The molecular orbital coefficients; mo_coeff.shape = (n_ao, n_mo)
     mo_occ : np.ndarray
         The occupations of the molecular orbitals; mo_occ.shape = (nspin, n_ao)
     _eri : np.ndarray
@@ -228,7 +249,7 @@ class QMCMeanField:
     ovlp : np.ndarray
         The atomic orbital overlap matrix; ovlp.shape = (n_ao, n_ao)
     mo_coeff : np.ndarray
-        The molecular orbital coefficients; mo_coeff.shape = (nspin, n_ao, n_ao)
+        The molecular orbital coefficients; mo_coeff.shape = (n_ao, n_mo)
     mo_occ : np.ndarray
         The occupations of the molecular orbitals; mo_occ.shape = (nspin, n_ao)
     _eri : np.ndarray
@@ -272,30 +293,25 @@ class QMCMeanField:
         return self.E_mf
 
 
-def orth_overlap(S: np.ndarray, oao: str = "oao") -> np.ndarray:
-    r"""Return the orthogonalized overlap matrix S.
+def orth_overlap(S: np.ndarray) -> np.ndarray:
+    r"""Orthogonalize S via the Loewdin (symmetric) procedure.
 
     This matrix is used to orthogonalize:
-        h1e -> S.conj().T @ h1e @ S
-        gmat -> S.conj().T @ gmat @ S
-        Lgamma -> S.conj().T @ Lgamma @ S
+        h1e -> S_orth.conj().T @ h1e @ S_orth
+        gmat -> S_orth.conj().T @ gmat @ S_orth
+        Lgamma -> S_orth.conj().T @ Lgamma @ S_orth
 
     Parameters
     ----------
     S : np.ndarray
-        The metric matrix: either the AO overlap matrix if oao == "oao",
-        or the matrix of MO coefficients in the AO basis.
-    oao : str
-        Whether to use Loewdin orthogonalization (oao == "oao": default),
-        or the MO basis (oao != "oao").
+        The metric matrix, typically the overlaps between atomic orbitals.
 
     Returns
     -------
-    S : np.ndarray
-        The MO coefficient matrix (unchanged),
-        or the Loewdin orthogonalization of the AO overlap matrix.
+    S_orth : np.ndarray
+        The Loewdin orthogonalization of S.
     """
-    return loewdin_orth(S) if oao.lower() == "oao" else S
+    return loewdin_orth(S)
 
 
 def dress_h1e_photon(
@@ -346,7 +362,8 @@ def decompose_tensor_eri(
     thresh: float = 1.0e-12,
     lambda_dot_mu: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int]:
-    r"""Decompose the electron repulsion integrals into Cholesky form.
+    r"""Decompose the electron repulsion integrals into Cholesky form,
+    and orthogonalize them with the overlap matrix S.
 
     A modified copy of openms.qmc.tools.chols_full()
     that does not require a PySCF Mole object.
@@ -487,60 +504,11 @@ def decompose_tensor_bilinear(
     return L_bil, n_bil
 
 
-def combine_boson(
-    omega_photon: np.ndarray,
-    omega_phonon: np.ndarray,
-    lambda_dot_mu: np.ndarray,
-    g_phonon: np.ndarray,
-    dim_fock_photon: int,
-    dim_fock_phonon: int,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    r"""Combine the photon and phonon quantities:
-    frequencies, bilinear couplings, and Fock space dimensions.
-
-    In this implementation we also multiply the photonic coupling matrix
-    :math:`\lambda_\alpha \cdot \mu`, which is used in both the bilinear
-    and dipole self-energy terms, by the bilinear factor :math:`\sqrt{\omega_\alpha/2}`.
-
-    Parameters
-    ----------
-    omega_photon : np.ndarray
-        The photon frequencies, of shape (nphoton,)
-    omega_phonon : np.ndarray
-        The phonon frequencies, of shape (nphonon,)
-    lambda_dot_mu : np.ndarray
-        The photon coupling matrix, of shape (nphoton, nao, nao)
-    g_phonon : np.ndarray
-        The phonon coupling matrix, of shape (nphonon, nao, nao)
-    dim_fock_photon : int
-        The photon Fock space dimension
-    dim_fock_phonon : int
-        The phonon Fock space dimension
-
-    Returns
-    -------
-    omega : np.ndarray
-        The boson frequencies, of shape (nmode,) == (nphonon + nphonon,)
-    g_bilinear : np.ndarray
-        The bilinear coupling matrix, of shape (nmode, nao, nao)
-    dim_fock : int
-        The Fock space dimension == max(dim_fock_photon, dim_fock_phonon)
-    """
-
-    omega = np.concatenate((omega_photon, omega_phonon), axis=0)
-
-    g_photon = np.einsum("n, npq -> npq", np.sqrt(omega_photon / 2), lambda_dot_mu)
-    g_bilinear = np.concatenate((g_photon, g_phonon), axis=0)
-
-    dim_fock = max(dim_fock_photon, dim_fock_phonon)
-
-    return omega, g_bilinear, dim_fock
-
-
 def holstein_coupling(
     rdm1: np.ndarray,
     g: float | np.ndarray,
     omega: float | np.ndarray,
+    nmode: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     r"""
     From a one-electron reduced density matrix,
@@ -557,9 +525,13 @@ def holstein_coupling(
         optionally different for different modes (sites)
     omega : float | np.ndarray
         The phonon frequency (optionally differing by mode)
+    nmode: int (Optional)
+        The number of phonon modes. Defaults to the number of atomic orbitals.
 
     Returns
     -------
+    nmode_phonon : int
+        The number of phonon modes. Defaults to the number of atomic orbitals.
     omega : np.ndarray
         The Holstein phonon frequencies, converted to an array if necessary;
         omega.shape = (nmode,)
@@ -569,7 +541,8 @@ def holstein_coupling(
 
     """
     nao = rdm1.shape[0]
-    nmode = nao
+    if nmode is None:
+        nmode = nao
 
     if isinstance(omega, float):
         omega = np.array([omega for _ in range(nmode)])
@@ -587,4 +560,275 @@ def holstein_coupling(
     for i in range(nmode):
         gmat[i, i, i] = g[i] * rdm1[i, i]
 
-    return omega, gmat
+    return nmode, omega, gmat
+
+
+def combine_boson(
+    nmodes_photon: int | None = None,
+    nmodes_phonon: int | None = None,
+    omega_photon: np.ndarray | None = None,
+    omega_phonon: np.ndarray | None = None,
+    g_photon: np.ndarray | None = None,
+    g_phonon: np.ndarray | None = None,
+    dim_fock_photon: int | None = None,
+    dim_fock_phonon: int | None = None,
+) -> tuple[int, int, np.ndarray, np.ndarray]:
+    r"""Combine the photon and phonon quantities:
+    frequencies, bilinear couplings, and Fock space dimensions.
+
+    Allows photon, phonon, or both parameters to be specified.
+
+    Parameters (All optional)
+    -------------------------
+    nmodes_photon: int
+        The number of photon modes
+    nmodes_phonon: int
+        The number of phonon modes
+    omega_photon : np.ndarray
+        The photon frequencies, of shape (nphoton,)
+    omega_phonon : np.ndarray
+        The phonon frequencies, of shape (nphonon,)
+    g_photon : np.ndarray
+        The photon coupling matrix, of shape (nphoton, nao, nao).
+        Includes factor of sqrt(omega_photon/2) already
+    g_phonon : np.ndarray
+        The phonon coupling matrix, of shape (nphonon, nao, nao)
+    dim_fock_photon : int
+        The photon Fock space dimension
+    dim_fock_phonon : int
+        The phonon Fock space dimension
+
+    Returns
+    -------
+    nmodes : int
+        The total number of boson modes == nmodes_photon + nmodes_phonon
+    dim_fock : int
+        The Fock space dimension == max(dim_fock_photon, dim_fock_phonon)
+    omega : np.ndarray
+        The boson frequencies, of shape (nmode,) == (nphonon + nphonon,)
+    g_bilinear : np.ndarray
+        The bilinear coupling matrix, of shape (nmode, nao, nao)
+    """
+
+    if omega_photon is None and omega_phonon is None:
+        raise ValueError("Supply photon or phonon components (or both)!")
+
+    if omega_photon is None:
+        nmodes = nmodes_phonon
+        omega = omega_phonon
+        g_bilinear = g_phonon
+        dim_fock = dim_fock_phonon
+        pass
+    elif omega_phonon is None:
+        nmodes = nmodes_photon
+        omega = omega_photon
+        g_bilinear = g_photon
+        dim_fock = dim_fock_photon
+    else:
+        nmodes = nmodes_photon + nmodes_phonon
+        omega = np.concatenate((omega_photon, omega_phonon), axis=0)
+        g_bilinear = np.concatenate((g_photon, g_phonon), axis=0)
+        dim_fock = max(dim_fock_photon, dim_fock_phonon)
+
+    return nmodes, dim_fock, omega, g_bilinear
+
+
+def pyscf_openms_to_qmc(
+    mol: Mol | Boson,
+    mf: HF | QEDHF,
+    use_oao: bool = True,
+    chol_thresh: float = 1.0e-6,
+    ncomponents: int = 1,
+    has_photon: bool = False,
+    has_phonon: bool = False,
+    dress_eri_dse: bool = False,
+    bilinear_scheme: int = 2,
+    verbose: int | None = None,
+    stdout: int | None = None,
+    photon_gauge: str | None = None,
+    long_wave_approx: bool = True,
+    nmodes_photon: int | None = None,
+    dim_fock_photon: int | None = None,
+    omega_photon: float | np.ndarray | None = None,
+    lambda_dot_mu: np.ndarray | None = None,
+    phonon_type: str | None = None,
+    dim_fock_phonon: int | None = None,
+    coupling_phonon: float | np.ndarray | None = None,
+    omega_phonon: float | np.ndarray | None = None,
+) -> tuple[AFQMCSystem, QMCMeanField]:
+    r"""Wrapper to convert pyscf/OpenMS objects to AFQMC form:
+    A molecule object, either pyscf.gto.Mole or openms.lib.boson.Boson,
+    and a mean-field object, either pyscf.scf.hf.RHF or openms.mqed.qedhf.RHF.
+    Includes, optionally, photonic and phononic components.
+
+    Note that if mf is a QEDHF object, then it includes a Boson object
+    as the mf.qed attribute.
+
+    pyscf.gto.Mole and pyscf.hf.RHF objects to AFQMCSystem form.
+    This part is electron-only.
+
+    Parameters
+    ----------
+    mol : pyscf.gto.Mole | openms.lib.boson.Boson
+        The molecular object.
+    mf : pyscf.scf.hf.RHF | openms.mqed.qedhf.RHF
+        The mean-field object.
+    use_oao: bool
+        Whether to use the orthogonalized atomic orbital representation
+        for the QMC Hamiltonian (default: True). If not use_oao, then
+        use the molecular orbital representation.
+    chol_thresh : float
+        The threshold for the Cholesky decomposition of the two-electron integrals.
+        Default: 1e-6
+    ncomponents : int
+        The number of spin components to compute separately. Default: 1
+    has_photon: bool
+        Whether the system is coupled to an optical cavity.
+    has_phonon: bool
+        Whether to include electron-phonon coupling.
+    dress_eri_dse : bool
+        For photon-copuled calculations, whether to dress the 2-e integrals
+        with the dipole self-energy. Default: False
+    bilinear_scheme : int
+        The scheme to decompose the bilinear coupling:
+            1 (generates 3 * nmodes auxiliary fields),
+            2 (generates 2 * nmodes auxiliary fields).
+        Default: 2
+    verbose: int (Optional)
+        The verbosity level (1 lowest, 5 for debugging). If none provided, use mol.verbose
+    stdout: int (Optional)
+        The standard output buffer. If none provided, use mol.stdout
+
+    Optional parameters (bosonic)
+    -----------------------------
+    photon_gauge : str
+        The gauge for the photon coupling. UNUSED; we assume length gauge.
+    long_wave_approx : bool
+        Whether to use the long-wavelength approximation for the photons.
+        UNUSUED, but currently assumed True.
+    nmode_photon : int
+        The number of photon modes.
+    dim_fock_photon : int
+        The Fock space dimension of the photon modes
+    omega_photon : np.ndarray
+        The photon frequencies; if an array, omega_photon.shape = (nmode_photon,)
+    lambda_dot_mu : np.ndarray
+        The photon coupling in the length gauge; lambda_dot_mu.shape = (nmode_photon, n_ao, n_ao)
+    phonon_type : str
+        What type of phonons to compute. For now, only "holstein" is supported.
+    dim_fock_phonon : int
+        The Fock space dimension of the phonon modes
+    coupling_phonon: float | np.ndarray
+        The Holstein coupling; if an array, coupling_phonon.shape = (n_ao,)
+    omega_phonon : float | np.ndarray
+        The phonon frequencies; if an array, omega_phonon.shape = (n_ao,)
+
+    """
+    from pyscf.ao2mo import restore
+
+    # Read the electron-only quantities
+    n_ao = mol.nao_nr()
+    hcore = mf.get_hcore()
+    ovlp = orth_overlap(mf.get_ovlp()) if use_oao else mf.mo_coeff
+    eri = restore(1, mf._eri, n_ao)
+
+    if verbose is None:
+        verbose = mol.verbose
+
+    if stdout is None:
+        stdout = mol.stdout
+
+    # Read the photonic quantities
+    if has_photon:
+        if isinstance(mol, Boson):
+            lambda_dot_mu = mol.gmat.copy()
+            freq_photon = mol.boson_freq
+            nmodes_photon = lambda_dot_mu.shape[0]
+            dim_fock_photon = max(mol.nboson_states)
+            pass
+        elif omega_photon is None:
+            raise ValueError("Either supply a Boson object or photonic parameters!")
+        else:
+            if omega_photon is float:
+                freq_photon = np.repeat(omega_photon, nmodes_photon)
+        hcore = dress_h1e_photon(hcore, ovlp, lambda_dot_mu)
+        gmat_photon = np.einsum(
+            "n, npq -> npq", np.sqrt(0.5 * omega_photon), lambda_dot_mu
+        )
+
+        if dress_eri_dse:
+            eri += np.einsum("npq, nrs -> pqrs", lambda_dot_mu, lambda_dot_mu)
+            nfields_dse = 0
+        else:
+            L_dse, nfields_dse = decompose_tensor_dse(
+                lambda_dot_mu=lambda_dot_mu, S=ovlp
+            )
+
+    # Decompose the two-electron integrals, which are optionally dressed by DSE
+    ltensor, nbarefields = decompose_tensor_eri(eri=eri, S=ovlp, thresh=chol_thresh)
+    if has_photon and not dress_eri_dse:
+        ltensor = np.concatenate(ltensor, L_dse, axis=0)
+        nbarefields += nfields_dse
+
+    # Read the phonon quantities
+    if has_phonon:
+        if phonon_type is not None:
+            if phonon_type.lower() == "holstein":
+                rdm = mf.make_rdm1()
+                nmodes_phonon, freq_phonon, gmat_phonon = holstein_coupling(
+                    rdm1=rdm, g=coupling_phonon, omega=omega_phonon
+                )
+            else:
+                raise NotImplementedError("Only Holstein phonons implemented for now.")
+
+    # Combine photon and phonon quantities
+    nfields_bilinear = 0
+    if has_photon or has_phonon:
+        nmodes, dim_fock, boson_freq, geb = combine_boson(
+            nmodes_photon,
+            nmodes_phonon,
+            freq_photon,
+            freq_phonon,
+            gmat_photon,
+            gmat_phonon,
+            dim_fock_photon,
+            dim_fock_phonon,
+        )
+        chol_bilinear, nfields_bilinear = decompose_tensor_bilinear(
+            g_bil=geb, S=ovlp, scheme=bilinear_scheme
+        )
+        ltensor = np.concatenate(ltensor, chol_bilinear[0], axis=0)
+    nfields = nbarefields + nfields_bilinear
+
+    h1e = np.array([hcore for _ in ncomponents])
+
+    qmcsys = AFQMCSystem(
+        n_ao=mol.nao_nr(),
+        h1e=h1e,
+        ovlp=ovlp,
+        ltensor=ltensor,
+        nbarefields=nbarefields,
+        nfields=nfields,
+        nelec=mol.nelec,
+        nelectron=mol.nelectron,
+        spin=mol.spin,
+        nuc_energy=mf.energy_nuc(),
+        nmodes=nmodes,
+        dim_fock=dim_fock,
+        boson_freq=boson_freq,
+        chol_bilinear=chol_bilinear,
+        geb=geb,
+        verbose=verbose,
+        stdout=stdout,
+    )
+
+    qmcmf = QMCMeanField(
+        h1e=h1e,
+        ovlp=ovlp,
+        mo_coeff=mf.mo_coeff,
+        mo_occ=mf.mo_occ,
+        eri=eri,
+        E_mf=mf.energy_tot(),
+    )
+
+    return qmcsys, qmcmf

@@ -221,6 +221,4 @@ def loewdin_orth(S: numpy.ndarray) -> numpy.ndarray:
     vals, vecs = eigh(S)
     index = vals > SAFE_EIGH_LINDEP
 
-    return backend.dot(
-        vecs[:, index] / backend.sqrt(vals[index]), vecs[:, index].conj().T
-    )
+    return numpy.dot(vecs[:, index] / numpy.sqrt(vals[index]), vecs[:, index].conj().T)
