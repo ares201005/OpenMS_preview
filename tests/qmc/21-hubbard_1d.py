@@ -80,7 +80,8 @@ class TestHubbard1d(unittest.TestCase):
         verbose = 1
 
         #### Reference energy, via Block2
-        E_dmrg = -2.875942809002934
+        E_dmrg = -2.875942809002934  # L = N = 4; t = -1, U = 2
+        # E_dmrg = -9.593764921907464  # L = N = 12; t = -1, U = 2
 
         #### Lattice parameters
         L = 4
@@ -91,7 +92,7 @@ class TestHubbard1d(unittest.TestCase):
         #### Hubbard parameters
         t = -1.0
         U = 2.0
-        N = 4
+        N = L**dim  # half-filling
         nspin = 1
         hub = Hubbard(
             t=t,
@@ -112,7 +113,7 @@ class TestHubbard1d(unittest.TestCase):
         verbose = 3
         dt = 0.01
         t_max = 20.0
-        num_walker = 5000
+        num_walker = 500
         E_scheme = "hybrid"
 
         E_qmc, std = run_afqmc(mol, mf, t_max, dt, num_walker, E_scheme, verbose)

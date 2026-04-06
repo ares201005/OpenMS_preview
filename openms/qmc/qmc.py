@@ -454,6 +454,7 @@ class QMCbase(object):
         logger.note(self, task_title("Get integrals"))
         if isinstance(self.system, AFQMCSystem):
             self.h1e = self.system.h1e
+            self.nuc_energy = self.system.nuc_energy
             self.ltensor = self.system.ltensor
             self.nbarefields = self.system.nbarefields
             self.nfields = self.system.nfields

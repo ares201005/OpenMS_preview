@@ -199,16 +199,17 @@ class AFQMCSystem:
         else:
             self.nelec = nelec
 
-        self.nuc = nuc_energy
+        self.nuc_energy = nuc_energy
 
         # Methods (to replicate pyscf syntax. TODO: deprecate)
         self.nao_nr = lambda *args: n_ao
         self.energy_nuc = lambda *args: nuc_energy
 
         # Boson quantities
+        is_boson = nmodes is not None and dim_fock is not None
         self.nmodes = nmodes
         self.dim_fock = dim_fock
-        self.nboson_states = self.nmodes * self.dim_fock
+        self.nboson_states = self.nmodes * self.dim_fock if is_boson else None
         self.boson_freq = boson_freq
         self.chol_bilinear = chol_bilinear
         self.geb = geb
@@ -332,7 +333,7 @@ def dress_h1e_photon(
     Parameters
     ----------
     h1e_bare : np.ndarray
-        The bare electronic Hamiltonian, in the AO basis (not yet orthogonalized);
+        The bare electronic Hamiltonian, in the orthogonalized AO basis;
         h1e_bare.shape = (nao, nao)
     S : np.ndarray
         The metric matrix for orthogonalizaiton; S.shape = (nao, nao)
@@ -345,15 +346,13 @@ def dress_h1e_photon(
     -------
     h1e : np.ndarray
         The dressed one-electron integrals.
-        h1e.shape = (nao, nao) (TODO: (nspin, nao, nao)?)
+        h1e.shape = (nao, nao)
     """
-    h1e = S.conj().T @ h1e_bare @ S
+    # h1e = S.conj().T @ h1e_bare @ S
     ldmu_orth = np.einsum(
         "pi, nij, jq -> npq", S.conj().T, lambda_dot_mu, S, optimize=True
     )
-    h1e += 0.5 * np.einsum("npq, nqs -> qs", ldmu_orth, ldmu_orth)
-
-    return h1e
+    return h1e_bare + 0.5 * np.einsum("npq, nqs -> qs", ldmu_orth, ldmu_orth)
 
 
 def decompose_tensor_eri(
@@ -726,10 +725,10 @@ def pyscf_openms_to_qmc(
     """
     from pyscf.ao2mo import restore
 
-    # Read the electron-only quantities
+    # Read the electron-only quantities and orthogonalize hcore
     n_ao = mol.nao_nr()
-    hcore = mf.get_hcore()
     ovlp = orth_overlap(mf.get_ovlp()) if use_oao else mf.mo_coeff
+    hcore = ovlp.T @ mf.get_hcore() @ ovlp
     eri = restore(1, mf._eri, n_ao)
 
     if verbose is None:
@@ -783,6 +782,7 @@ def pyscf_openms_to_qmc(
 
     # Combine photon and phonon quantities
     nfields_bilinear = 0
+    nmodes = dim_fock = boson_freq = geb = chol_bilinear = None
     if has_photon or has_phonon:
         nmodes, dim_fock, boson_freq, geb = combine_boson(
             nmodes_photon,
@@ -800,7 +800,7 @@ def pyscf_openms_to_qmc(
         ltensor = np.concatenate(ltensor, chol_bilinear[0], axis=0)
     nfields = nbarefields + nfields_bilinear
 
-    h1e = np.array([hcore for _ in ncomponents])
+    h1e = np.array([hcore for _ in range(ncomponents)])
 
     qmcsys = AFQMCSystem(
         n_ao=mol.nao_nr(),
