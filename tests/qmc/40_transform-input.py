@@ -1,15 +1,13 @@
 import unittest
 import numpy as np
-from scipy.linalg import svd
-from pyscf import gto, scf
+from pyscf import scf
 from pyscf.gto import Mole as Mol
 from pyscf.ao2mo import restore
 from pyscf.scf.hf import RHF as HF
-from openms.mqed import qedhf
 from openms.qmc.afqmc import AFQMC
 from openms.qmc import transform_input
 from openms.qmc.transform_input import AFQMCSystem, QMCMeanField
-from openms.lib import boson
+from openms.qmc.tools import get_mean_std
 from molecules import get_mol
 
 
@@ -23,7 +21,7 @@ def get_qmc_object(
     uhf: bool = False,
     energy_scheme: str = "hybrid",
     chol_thresh: float = 1.0e-6,
-):
+) -> AFQMC:
     r"""Note the number of walkers here is small, in order to do fast test"""
     return AFQMC(
         mol,
@@ -37,17 +35,6 @@ def get_qmc_object(
         property_calc_freq=1,
         verbose=mol.verbose,
     )
-
-
-def get_mean_std(energies, ratio=10):
-    # Compute the mean and standard deviation
-    # Extract the real parts of the last m elements
-    m = max(1, len(energies) // ratio)
-    last_m_real = np.asarray(energies[-m:]).real
-    mean = np.mean(last_m_real)
-    std_dev = np.std(last_m_real)
-
-    return mean, std_dev
 
 
 # Global quantities
@@ -65,7 +52,7 @@ E_hf = mf.kernel()
 # AFQMC quantities
 dt = 0.005
 time = 6.0
-num_walkers = 200
+num_walkers = 1  # some statistical error accumulates over walkers
 uhf = False
 energy_scheme = "hybrid"
 chol_thresh = 1.0e-20
@@ -82,10 +69,6 @@ qmc_default = get_qmc_object(
 )
 
 tlist, Elist_default = qmc_default.kernel()
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestTransformInputElectron(unittest.TestCase):

@@ -120,9 +120,8 @@ class AFQMCSystem:
     dim_fock : int
         The dimension of the Fock space for each boson mode.
         (Parameter passed through unchanged.)
-    nboson_states : int
-        The total size of the boson degrees of freedom, dim_fock * nmodes.
-        Should be DEPRECATED.
+    nboson_states : list[int]
+        The Fock space dimension for each mode, as a list; to be DEPRECATED.
     boson_freq : np.ndarray
         The boson frequencies. boson_freq.shape = (nmode,)
         (Parameter passed through unchanged.)
@@ -209,7 +208,9 @@ class AFQMCSystem:
         is_boson = nmodes is not None and dim_fock is not None
         self.nmodes = nmodes
         self.dim_fock = dim_fock
-        self.nboson_states = self.nmodes * self.dim_fock if is_boson else None
+        self.nboson_states = (
+            [self.dim_fock for _ in range(self.nmodes)] if is_boson else None
+        )
         self.boson_freq = boson_freq
         self.chol_bilinear = chol_bilinear
         self.geb = geb
@@ -485,9 +486,9 @@ def decompose_tensor_bilinear(
         The number of bilinear tensors so generated.
     """
 
-    if scheme != 1 or scheme != 2:
+    if scheme != 1 and scheme != 2:
         raise ValueError(
-            "Only bilinear decomposition schemes 1 (threefold) and 2 (twofold) are supported."
+            f"Only bilinear decomposition schemes 1 (threefold) and 2 (twofold) are supported. Value is {scheme}"
         )
 
     nmode = g_bil.shape[0]
@@ -730,6 +731,7 @@ def pyscf_openms_to_qmc(
     ovlp = orth_overlap(mf.get_ovlp()) if use_oao else mf.mo_coeff
     hcore = ovlp.T @ mf.get_hcore() @ ovlp
     eri = restore(1, mf._eri, n_ao)
+    ltensor, nbarefields = decompose_tensor_eri(eri=eri, S=ovlp, thresh=chol_thresh)
 
     if verbose is None:
         verbose = mol.verbose
@@ -750,9 +752,11 @@ def pyscf_openms_to_qmc(
         else:
             if omega_photon is float:
                 freq_photon = np.repeat(omega_photon, nmodes_photon)
+            else:
+                freq_photon = np.array(omega_photon)
         hcore = dress_h1e_photon(hcore, ovlp, lambda_dot_mu)
         gmat_photon = np.einsum(
-            "n, npq -> npq", np.sqrt(0.5 * omega_photon), lambda_dot_mu
+            "n, npq -> npq", np.sqrt(0.5 * omega_photon), lambda_dot_mu, optimize=True
         )
 
         if dress_eri_dse:
@@ -762,12 +766,10 @@ def pyscf_openms_to_qmc(
             L_dse, nfields_dse = decompose_tensor_dse(
                 lambda_dot_mu=lambda_dot_mu, S=ovlp
             )
-
-    # Decompose the two-electron integrals, which are optionally dressed by DSE
-    ltensor, nbarefields = decompose_tensor_eri(eri=eri, S=ovlp, thresh=chol_thresh)
-    if has_photon and not dress_eri_dse:
-        ltensor = np.concatenate(ltensor, L_dse, axis=0)
-        nbarefields += nfields_dse
+            ltensor = np.concatenate((ltensor, L_dse), axis=0)
+            nbarefields += nfields_dse
+    else:
+        nmodes_photon = freq_photon = gmat_photon = dim_fock_photon = None
 
     # Read the phonon quantities
     if has_phonon:
@@ -779,6 +781,8 @@ def pyscf_openms_to_qmc(
                 )
             else:
                 raise NotImplementedError("Only Holstein phonons implemented for now.")
+    else:
+        nmodes_phonon = freq_phonon = gmat_phonon = dim_fock_phonon = None
 
     # Combine photon and phonon quantities
     nfields_bilinear = 0
@@ -797,7 +801,7 @@ def pyscf_openms_to_qmc(
         chol_bilinear, nfields_bilinear = decompose_tensor_bilinear(
             g_bil=geb, S=ovlp, scheme=bilinear_scheme
         )
-        ltensor = np.concatenate(ltensor, chol_bilinear[0], axis=0)
+        ltensor = np.concatenate((ltensor, chol_bilinear[0]), axis=0)
     nfields = nbarefields + nfields_bilinear
 
     h1e = np.array([hcore for _ in range(ncomponents)])
