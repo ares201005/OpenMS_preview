@@ -30,21 +30,6 @@ class FermiHubbard(FermionGASCF):
         if (d == 1):
             return self.t
         return np.zeros((2,2))
-    
-    # def _compute_structure_factor(self, A):
-    #     N = self.N
-    #     npoints = N
-    #     data = np.zeros(npoints)
-    #     qarr = np.zeros(npoints)
-    #     for n in range(npoints):
-    #         q = (np.pi * n) / npoints
-    #         v = np.zeros(N, dtype=np.complex128)
-    #         for I in range(N):
-    #             v[I] = np.exp(1j*q*I) if self.PBC else np.sin(q*I)
-    #         data[n] = (1/N)*(v.conj().T @ A @ v).real
-    #         qarr[n] = q
-        
-    #     return qarr, data
 
     def _compute_structure_factor(self, A):
         # Returns S(k_m) on the natural OBC/PBC momentum grid.
@@ -64,12 +49,11 @@ class FermiHubbard(FermionGASCF):
             ms = np.arange(1, N+1)
             ks = np.pi * ms / (N + 1)
             data = np.zeros(N, dtype=float)
-            norm = np.sqrt(2/(N+1))
             sites = np.arange(1, N+1)  # 1..N
             for idx, k in enumerate(ks):
                 # v is real, so $v^\dagger = v^T$
-                v = norm * np.sin(k * sites)
-                data[idx] = (1/N) * (v @ A @ v).real
+                v = np.sin(k * sites)
+                data[idx] = (2/(N+1)) * (v @ A @ v).real
             return ks, data
 
     def _charge_structure_factor(self, res):
@@ -100,6 +84,8 @@ class FermiHubbard(FermionGASCF):
         print(f"self.Ne = {self.Ne}")
         print(f"Delta computed Ne = {sum(np.trace(res.Delta(I)) for I in range(self.N))}")
         print(f"correlation computed Ne = {sum(np.trace(res.get_1body_corr(I, I)) for I in range(self.N))}")
+        print(f"E = {res.E}")
+        
         qS, S = self._spin_structure_factor(res)
         qN, N = self._charge_structure_factor(res)
 
@@ -110,6 +96,7 @@ class FermiHubbard(FermionGASCF):
         plt.xlabel("q")
         plt.ylabel("Structure factor")
         plt.legend()
+        plt.savefig("results/sf_plot.png")
         plt.show()
 
         breakpoint()

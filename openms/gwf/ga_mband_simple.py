@@ -1,14 +1,13 @@
 import numpy as np
 import scipy.linalg
-from pyscf import lib
-
-from pdb import set_trace as st
+import matplotlib.pyplot as plt
 
 # matrix indices are given by (I, alpha) where I denotes the site, alpha the local state
 # The ordering of matrix indices is given by (0,1), ... , (0, M), (1,0), ..., (1,M), ..., (N,M)
 
-class GASCF(lib.StreamObject):
-    def __init__(self, h1e, eri, N, Ne, embedding_cutoff=1e-14):
+class GASCF:
+    def __init__(self, h1e, eri, N, Ne, msg, embedding_cutoff=1e-14):
+        self.msg = msg
         # sanity check inputs
         if (Ne > h1e.shape[0]):
             raise ValueError
@@ -188,11 +187,14 @@ class GASCF(lib.StreamObject):
             # TODO check that groundstate is nondegenerate
             if (E[0] == E[1]):
                 # groundstate is degenerate
-                st()
+                breakpoint()
             self.phi[I] = phiC[:,0]
 
     def kernel(self):
-        for i in range(100):
+        print(self.msg)
+        iter = []
+        diff = []
+        for i in range(300):
             prev_coeff = self.mo_coeff
             # set mo_energy, mo_coeff, C, by solving  Hqp
             self._update_solve_qp()
@@ -201,38 +203,44 @@ class GASCF(lib.StreamObject):
 
             self._update_renormalizations()
 
-            print(f"Iteration {i+1}: diff {np.linalg.norm(prev_coeff - self.mo_coeff)}")
+            d = np.linalg.norm(prev_coeff - self.mo_coeff)
+            print(f"Iteration {i+1}: diff {d}")
+            iter.append(i)
+            diff.append(d)
             
-        st()
+        plt.figure()
+        plt.title(self.msg)
+        plt.plot(iter, diff, label=r"Norm Difference in all $\left|\Psi_0^e\right\rangle$")
+        plt.xlabel("Iterations")
+        plt.ylabel("Norm Difference")
+        plt.legend()
+        plt.savefig("results/scf_plot.png")
+        plt.show()
 
-        self._post_kernel()
 
-    def _post_kernel(self):
-        pass
-
-
-def get_ga_model(N=12, filling=0.5, U=2.0, t=-1.0, PBC=True):
+def get_ga_model(N=12, filling=0.5, U=2.0, t=-1.0, J=-1.0, PBC=False):
     dim = N * 2
-    Ne = int(N * filling)
+    Ne = int(dim * filling)
+
+    T = (t*np.eye(2)) + (J*np.array([[-1, 1], [1, -1]]))
 
     # 1-electron interactions
     h1e = np.zeros((dim, dim))
     for I in range(N-1):
-        for a in range(2):
-            h1e[I*2 + a, (I+1)*2 + a] = t
-            h1e[(I+1)*2 + a, I*2 + a] = t
+        h1e[I*2:(I+1)*2, (I+1)*2:(I+2)*2] = T
+        h1e[(I+1)*2:(I+2)*2, I*2:(I+1)*2] = T
     if PBC:
         for a in range(2):
-            h1e[(N-1)*2 + a, a] = t
-            h1e[a, (N-1)*2 + a] = t
+            h1e[(N-1)*2:N*2, 0:2] = T
+            h1e[0:2, (N-1)*2:N*2] = T
 
     # 2-electron interactions
     eri = np.zeros((dim, dim, dim, dim))
     for I in range(N):
         eri[I*2, I*2+1, I*2, I*2+1] = -U
 
-    return GASCF(h1e, eri, N, Ne)
+    return GASCF(h1e, eri, N, Ne, f"N={N}, t={t}, U={U}, J={J}, PBC={PBC}, filling={Ne/(N*2)}")
 
 if __name__ == '__main__':
-    gamf = get_ga_model(PBC=False)
+    gamf = get_ga_model()
     gamf.kernel()

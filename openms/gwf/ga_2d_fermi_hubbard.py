@@ -52,6 +52,8 @@ class FermiHubbard(FermionGASCF):
         print(f"self.Ne = {self.Ne}")
         print(f"Delta computed Ne = {sum(np.trace(res.Delta(I)) for I in range(self.N))}")
         print(f"correlation computed Ne = {sum(np.trace(res.get_1body_corr(I, I)) for I in range(self.N))}")
+        print(f"E = {res.E}")
+        
         breakpoint()
 
 if __name__ == '__main__':

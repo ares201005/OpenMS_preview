@@ -123,6 +123,7 @@ class FermionGASCF(ABC):
         r"""
         Return the matrix :math:`\tilde{t}^{IJ}_{ab}` between sites :math:`I \neq J`.
         Must be implemented by the  concrete class.
+        The concrete class is expected to return  :math:`t^{II} = 0` for all sites :math:`I`.
         """
         pass
 
@@ -555,6 +556,7 @@ class FermionGASCF(ABC):
         :param maxiter: maximum number of iterations (by default the solver iterates until convergence)
         :param x0: optional initial guess for Newton's method.  If not provided it will be computed by the kernel.
         :param tolerance: maximum acceptable gradient norm.  Default value is 1e-4.
+        :param x: boolean specifying whether to included the packed vector in the result.  Default value is False.
         :param verbose: show verbose output regarding the Newton solver.  Default value is True.
 
         The kernel returns a ``FermionGASCFResult`` object that can be queried for success status and values of Lagrange multipliers, Gutzwiller parameters and projectors, and correlation functions.

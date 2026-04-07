@@ -1,6 +1,7 @@
 import numpy as np
 from sys import argv
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 from ga_mband import FermionGASCF
 
 class FermiHubbard(FermionGASCF):
@@ -31,7 +32,7 @@ class FermiHubbard(FermionGASCF):
             return self.t
         return np.zeros((2,2))
     
-    def kernel(self, verbose=True, maxiter=30, **kwargs):
+    def kernel(self, verbose=True, maxiter=100, **kwargs):
         if verbose:
             print("kernel invoked: " + self.msg)
 
@@ -43,14 +44,14 @@ class FermiHubbard(FermionGASCF):
             Earr[it] = res.E
             if res.result.success:
                 max = it
-                break     
+                break  
 
-        plt.figure()
-        plt.title(self.msg)
-        plt.xticks(range(max-1))
-        plt.plot(range(max-1), Earr[0:max-1])
-        plt.xlabel("Iterations")
-        plt.ylabel("Energy")
+        fig, ax = plt.subplots()
+        ax.plot(range(max-1), Earr[0:max-1])
+        ax.set_title(self.msg)
+        ax.set_xlabel("Iterations")
+        ax.set_ylabel("Energy")
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=15))
         plt.savefig("results/energy_plot.png")
         plt.show()
 
