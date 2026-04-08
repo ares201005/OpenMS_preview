@@ -775,9 +775,8 @@ def pyscf_openms_to_qmc(
     if has_phonon:
         if phonon_type is not None:
             if phonon_type.lower() == "holstein":
-                rdm = mf.make_rdm1()
                 nmodes_phonon, freq_phonon, gmat_phonon = holstein_coupling(
-                    rdm1=rdm, g=coupling_phonon, omega=omega_phonon
+                    rdm1=mf.make_rdm1(), g=coupling_phonon, omega=omega_phonon
                 )
             else:
                 raise NotImplementedError("Only Holstein phonons implemented for now.")

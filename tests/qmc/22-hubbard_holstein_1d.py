@@ -21,8 +21,11 @@ import unittest
 import numpy as np
 from pyscf import gto, scf, ao2mo
 from openms.models.hubbard import Hubbard
+from openms.qmc.transform_input import pyscf_openms_to_qmc, AFQMCSystem, QMCMeanField
 from openms.qmc.afqmc import AFQMC
 from openms.qmc.tools import analysis_autocorr
+
+np.set_printoptions(precision=3)
 
 r"""The Hubbard-Holstein model in OpenMS."""
 
@@ -48,16 +51,16 @@ def setup_mol_mf(hub: Hubbard, verbose: int = 1):
     return mol, mf
 
 
-def run_afqmc(
-    mol: gto.Mole,
-    mf: scf.hf.RHF,
+def setup_qmc(
+    mol: gto.Mole | AFQMCSystem,
+    mf: scf.hf.RHF | QMCMeanField,
     t_max: float = 10.0,
     dt: float = 0.005,
     num_walker: int = 500,
     E_scheme: str = "hybrid",
     verbose: int = 1,
-):
-    qmc = AFQMC(
+) -> AFQMC:
+    return AFQMC(
         mol,
         mf=mf,
         dt=dt,
@@ -67,6 +70,8 @@ def run_afqmc(
         verbose=verbose,
     )
 
+
+def run_qmc(qmc: AFQMC) -> tuple[float, float]:
     _, energies = qmc.kernel()
     output = analysis_autocorr(energies)
     E_qmc = output["etot"][0]
@@ -80,7 +85,17 @@ class TestHubbardHolstein1d(unittest.TestCase):
         verbose = 1
 
         #### Reference energy, via Block2
-        E_dmrg = -2.875942809002934
+        # E_noph = -2.875942809002934  # t = -1, U = 2, no phonon
+        E_noph = -4.462146352704201  # t = -1, U = 0.01, no phonon
+        # E_dmrg = (
+        #    -3.039521251791332
+        # )  # t = -1, U = 2, g = 0.1, omega = 0.25; dim_fock = 11
+        # E_dmrg = (
+        #    -2.876743192368235
+        # )  # t = -1, U = 2, L = N = 4, g = 0.001, omega = 0.005; dim_fock = 11
+        E_dmrg = (
+            -4.462947370880658
+        )  # t = -1, U = 0.01, L = N = 4, g = 0.001, omega = 0.005, dim_fock = 11
 
         #### Lattice parameters
         L = 4
@@ -88,12 +103,25 @@ class TestHubbardHolstein1d(unittest.TestCase):
         shape = "square"
         periodic = False
 
+        #### QMC parameters
+        verbose = 1
+        dt = 0.001
+        t_max = 20.0
+        num_walker = 2000
+        E_scheme = "hybrid"
+
         #### Hubbard parameters
         t = -1.0
-        U = 2.0
+        U = 0.01
         N = 4
-        g = 0.5
         nspin = 1
+
+        #### Holstein parameters
+        g = 0.001
+        omega = 0.005
+        dim_fock = 11
+
+        #### Set up the Hubbard model
         hub = Hubbard(
             t=t,
             U=U,
@@ -109,23 +137,65 @@ class TestHubbardHolstein1d(unittest.TestCase):
         mol, mf = setup_mol_mf(hub, verbose)
         E_hf = mf.kernel()
 
-        #### Set up the Holstein part
+        #### Previous version of QMC
+        qmc_old = setup_qmc(
+            mol=mol,
+            mf=mf,
+            t_max=t_max,
+            dt=dt,
+            num_walker=num_walker,
+            E_scheme=E_scheme,
+            verbose=verbose,
+        )
 
-        #### QMC parameters
-        verbose = 3
-        dt = 0.01
-        t_max = 20.0
-        num_walker = 5000
-        E_scheme = "hybrid"
+        #### New version of QMC
+        qmcmol, qmcmf = pyscf_openms_to_qmc(
+            mol=mol,
+            mf=mf,
+            use_oao="True",
+            has_phonon=True,
+            phonon_type="holstein",
+            bilinear_scheme=2,
+            coupling_phonon=g,
+            omega_phonon=omega,
+            dim_fock_phonon=dim_fock,
+        )
 
-        E_qmc, std = run_afqmc(mol, mf, t_max, dt, num_walker, E_scheme, verbose)
-        print(f"HF energy       = {E_hf:.6f}")
-        print(f"AFQMC energy    = {E_qmc:.6f} ± {std:.6f}")
-        print(f"DMRG energy     = {E_dmrg:.6f}")
+        qmc_new = setup_qmc(
+            mol=qmcmol,
+            mf=qmcmf,
+            t_max=t_max,
+            dt=dt,
+            num_walker=num_walker,
+            E_scheme=E_scheme,
+            verbose=verbose,
+        )
 
-        err = abs(E_qmc - E_dmrg)
+        print("Holstein quantities debug")
+        # print(f"mean-field density matrix: =\n {mf.make_rdm1()}")
+        print("old:")
+        print(f"ltensor: shape = {qmc_old.ltensor.shape}")
+        print(f"norm = {np.linalg.norm(qmc_old.ltensor)}")
+        print("new:")
+        print(f"geb = \n {qmcmol.geb}\n")
+        print(f"elec ltensor: shape = {qmcmol.ltensor[0:4, :, :].shape}\n")
+        print(f"{np.linalg.norm(qmcmol.ltensor[0:4, :, :])}")
+        print(f"full ltensor: shape = {qmcmol.ltensor.shape}\n")
+        print(f"{np.linalg.norm(qmcmol.ltensor)}")
 
-        self.assertLess(err, 0.1, msg=f"|E_qmc - E_dmrg| = {err:.6e}")
+        #### Run QMC
+        E_old, std_old = run_qmc(qmc_old)
+        E_new, std_new = run_qmc(qmc_new)
+
+        print(f"HF energy    (no phonon)    = {E_hf:.6f}")
+        print(f"AFQMC energy (no phonon)    = {E_old:.6f} ± {std_old:.6f}")
+        print(f"DMRG energy  (no phonon)    = {E_noph:.6f}")
+        print(f"AFQMC energy (w/ phonon)    = {E_new:.6f} ± {std_new:.6f}")
+        print(f"DMRG energy  (w/ phonon)    = {E_dmrg:.6f}")
+
+        err = abs(E_new - E_dmrg)
+
+        self.assertLess(err, 0.001, msg=f"|E_qmc - E_dmrg| = {err:.6e}")
 
 
 if __name__ == "main":
