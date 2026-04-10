@@ -17,6 +17,9 @@ class FermiBoseGASCF(FermionGASCF):
         self.BM = BM
         self.omega = omega
         self._nfock = np.prod(BM)
+        self._Bdict = {}
+        for n in set(BM):
+            self._Bdict[n] = _get_annihilation_operator(n)
         super().__init__(*args)
 
     def boson_array_to_idx(self, tup):
@@ -54,9 +57,9 @@ class FermiBoseGASCF(FermionGASCF):
             raise ValueError(f"g{nu}[{I}, {J}] has incorrect shape")
         return res
     
-    def _get_annahilation_operator(self, nu):
+    def _get_annihilation_operator(self, nu):
         B = np.eye(int(np.prod(self.BM[:nu])))
-        B = np.kron(_get_annihilation_operator(self.BM[nu]), B)
+        B = np.kron(self._Bdict[self.BM[nu]], B)
         B = np.kron(np.eye(int(np.prod(self.BM[nu+1:]))), B)
         return B
 
@@ -68,7 +71,7 @@ class FermiBoseGASCF(FermionGASCF):
         h = self.get_h(I)
         g = np.zeros((self.M[I], self.M[I]), dtype=np.complex128)
         for nu in range(self.BN):
-            beta = c.conj().T @ self._get_annahilation_operator(nu) @ c
+            beta = c.conj().T @ self._get_annihilation_operator(nu) @ c
             gp = beta.conj()*self.get_g(nu, I, I)
             g += gp + gp.conj().T
         return h + g
@@ -83,7 +86,7 @@ class FermiBoseGASCF(FermionGASCF):
             return t
         g = np.zeros((self.M[I], self.M[J]), dtype=np.complex128)
         for nu in range(self.BN):
-            beta = c.conj().T @ self._get_annahilation_operator(nu) @ c
+            beta = c.conj().T @ self._get_annihilation_operator(nu) @ c
             g += beta.conj()*self.get_g(nu, I, J) + beta*self.get_g(nu, J, I).conj().T
         return t + g
     
@@ -122,18 +125,16 @@ class FermiBoseGASCF(FermionGASCF):
         for m in range(self._nfock):
             grad_c[m] += np.dot(self.boson_idx_to_array(m) + 0.5, self.omega) * c[m]
         for nu in range(self.BN):
-            B = self._get_annahilation_operator(nu)
+            B = self._get_annihilation_operator(nu)
             Garr = np.zeros((N, N), dtype=object)
             for I in range(N):
                 for J in range(N):
                     Garr[I, J] = self._get_g(nu, I, J)
             Gnu = np.block(Garr.tolist())
             a = 0
-            b = 0
             for i in range(self._Moff[-1]):
                 a += np.dot(Gnu[i, :], expcorr[i, :])
-                b += np.dot(Gnu[:, i].conj(), expcorr[i, :])
-            grad_c += (a*B.T + b*B) @ c
+            grad_c += (a*B.T + a.conj()*B) @ c
 
         grad_Eb = 1 - (np.linalg.norm(c)**2)
 
