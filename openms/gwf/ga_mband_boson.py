@@ -106,17 +106,24 @@ class FermiBoseGASCF(FermionGASCF):
         self._c[0] = 1
         prev_E = 0
         fermion_res = None
+        initialized = False
         while True:
             # solve fermion problem and check for convergence
             if verbose:
                 print(f"c = {self._c}")
             fermion_res = super().kernel(verbose=verbose, **kwargs)
             E = fermion_res.E
-            dE = E - prev_E
-            if verbose:
-                print(f"E = {E}, dE = {dE}")
-            if (abs(dE) <= etol):
-                break
+
+            if initialized:
+                dE = E - prev_E
+                if verbose:
+                    print(f"E = {E}, dE = {dE}")
+                if (abs(dE) <= etol):
+                    break
+            else:
+                initialized = True
+                if verbose:
+                    print(f"E = {E}")
             prev_E = E
 
             # construct Hb
