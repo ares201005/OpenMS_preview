@@ -86,6 +86,9 @@ class FermionGASCF(ABC):
         for M in set(self.M):
             self._Cdict[M] = _get_annahilation_operators(M)
 
+        self._put_ht()
+        self._put_tarr()
+
     @abstractmethod
     def get_ht(self, I):
         r"""
@@ -95,11 +98,17 @@ class FermionGASCF(ABC):
         pass
 
     def _get_ht(self, I):
+        if (self._harr[I] is not None):
+            return self._harr[I]
         M = self.M[I]
         res = self.get_ht(I)
         if (res.shape != (M, M)):
             raise ValueError(f"ht[{I}] has incorrect shape")
+        self._harr[I] = res
         return res
+    
+    def _put_ht(self):
+        self._harr = [None] * self.N
     
     @abstractmethod
     def get_U(self, I):
@@ -208,15 +217,21 @@ class FermionGASCF(ABC):
         idx += N
 
         assert idx == len(x), "Unpack error: leftover elements in input array"
-        return psiarr, L, Lc, n, Ec  
+        return psiarr, L, Lc, n, Ec 
     
     def _get_tarr(self):
+        if (self._tarr is not None):
+            return self._tarr
         N = self.N
         tarr = np.zeros((N, N), dtype=object)
         for I in range(N):
             for J in range(N):
                 tarr[I, J] = self._get_tt(I, J)
+        self._tarr = tarr
         return tarr
+    
+    def _put_tarr(self):
+        self._tarr = None
 
     def _compute_renormalizations(self, psiarr, n):
         r"""
@@ -289,7 +304,7 @@ class FermionGASCF(ABC):
         return T, Tsrc
 
     
-    def _compute_Hqp(self, L, R, tarr):
+    def _compute_Hqp(self, L, R):
         r"""
         Compute
 
@@ -301,6 +316,7 @@ class FermionGASCF(ABC):
         in the single-particle basis.
         """
         N = self.N
+        tarr = self._get_tarr()
         t = np.block(tarr.tolist())
         Rblock = scipy.linalg.block_diag(*R)
         
@@ -366,8 +382,7 @@ class FermionGASCF(ABC):
         
         # calculate Hqp and energies of filled eigenstates
         R = self._compute_renormalizations(psiarr, n)
-        tarr = self._get_tarr()
-        Hqp = self._compute_Hqp(L, R, tarr)
+        Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         Lag += sum(qp_energy[i] for i in range(self.Ne))
 
@@ -420,15 +435,15 @@ class FermionGASCF(ABC):
 
         """
         N = self.N
-        psiarr, L, Lc, n, Ec = self._unpack_vector(x)
         tarr = self._get_tarr()
+        psiarr, L, Lc, n, Ec = self._unpack_vector(x)
 
         # get energy gradients
         grad_Ec = [1 - (psiarr[I].T.conj() @ psiarr[I]) for I in range(N)]
 
         # get quasiparticle and embedding Hamiltonians
         R = self._compute_renormalizations(psiarr, n)
-        Hqp = self._compute_Hqp(L, R, tarr)
+        Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
 
         # compute single particle correlations
@@ -557,7 +572,8 @@ class FermionGASCF(ABC):
         The kernel returns a ``FermionGASCFResult`` object that can be queried for success status and values of Lagrange multipliers, Gutzwiller parameters and projectors, and correlation functions.
         """
         # create initial guess and solve
-        N = self.N
+        self._put_ht()
+        self._put_tarr()
         if (x0 is None):
             x0 = self._get_initial_guess()
         options = {}
@@ -571,15 +587,16 @@ class FermionGASCF(ABC):
         # parse result
         psiarr, L, Lc, n, Ec = self._unpack_vector(result.x)
         R = self._compute_renormalizations(psiarr, n)
-        tarr = self._get_tarr()
-        Hqp = self._compute_Hqp(L, R, tarr)
+        Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         E = self._compute_lagrangian(result.x)
         if (not x):
             result.pop("x")
-
         expcorr = self._compute_1body_correlations(qp_coeff, R, psiarr)
         T, Tsrc = self._compute_density_renormalizations(psiarr, n)
+
+        self._put_ht()
+        self._put_tarr()
 
         return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec, T=T, Tsrc=Tsrc, result=result, corr=expcorr)
     
