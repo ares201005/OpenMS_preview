@@ -75,7 +75,7 @@ class FermionGASCF(lib.StreamObject):
     def _get_tt(self, I, J):
         return self.t[I, J]
 
-    def _get_annahilation_operators(self, M):
+    def _get_annihilation_operators(self, M):
         C = np.zeros((M, 2**M, 2**M))
         for i in range(M):
             for state in range(2**M):
@@ -173,7 +173,7 @@ class FermionGASCF(lib.StreamObject):
         for I in range(self.N):
             # get local state and correlation
             M = self.M
-            C = self._get_annahilation_operators(M)
+            C = self._get_annihilation_operators(M)
             B = scipy.linalg.sqrtm(np.linalg.inv(Delta[I] @ (np.eye(M) - Delta[I])))
             psi = psiarr[I]
 
@@ -227,7 +227,7 @@ class FermionGASCF(lib.StreamObject):
         # get coefficients for embedding Hamiltonian
         h = self._get_ht(I)
         U = self._get_U(I)
-        C = self._get_annahilation_operators(M)
+        C = self._get_annihilation_operators(M)
         # construct local Hamiltonian
         Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))
         Hloc += sum(U[a, b, c, d] * C[a].T @ C[b].T @ C[c] @ C[d] for a in range(M) for b in range(M) for c in range(M) for d in range(M))
@@ -303,7 +303,7 @@ class FermionGASCF(lib.StreamObject):
         grad_psiarr = []
         for K in range(N):
             M = self.M
-            C = self._get_annahilation_operators(M)
+            C = self._get_annihilation_operators(M)
             A = scipy.linalg.sqrtm(Delta[K] @  (np.eye(M) - Delta[K]))
             B = np.linalg.inv(A)
 
@@ -335,7 +335,7 @@ class FermionGASCF(lib.StreamObject):
         for I in range(N):
             M = self.M
             Lm = np.zeros((M,M), dtype=np.complex128)
-            C = self._get_annahilation_operators(M)
+            C = self._get_annihilation_operators(M)
             for a in range(M):
                 for b in range(M):
                     Lm[a,b] = psiarr[I].conj().T @ np.kron(np.eye(2**M), C[b].T @ C[a]) @ psiarr[I]
@@ -353,7 +353,7 @@ class FermionGASCF(lib.StreamObject):
 
             # calculate renormalization based matrix
             P = np.zeros((M,M), dtype=np.complex128)
-            C = self._get_annahilation_operators(M)
+            C = self._get_annihilation_operators(M)
             for alpha in range(M):
                 for gamma in range(M):
                     P[alpha, gamma] = psiarr[K].conj().T @ np.kron(C[alpha].T, np.eye(2**M)) @ np.kron(np.eye(2**M), C[gamma].T) @ psiarr[K]
@@ -504,7 +504,7 @@ class FermionGASCF(lib.StreamObject):
         for I in range(N):
             M = self.M
             K = scipy.linalg.logm((np.eye(M) - Delta[I]) @ np.linalg.inv(Delta[I]))
-            C = self._get_annahilation_operators(M)
+            C = self._get_annihilation_operators(M)
             rho = scipy.linalg.expm(sum(-K[a, b] * C[a].T @ C[b] for a in range(M) for b in range(M)))
             rho = (1/np.trace(rho)) * rho
             projectors.append(self.get_psi_matrix(psiarr[I]) @ scipy.linalg.sqrtm(rho))

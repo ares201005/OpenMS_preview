@@ -82,6 +82,10 @@ class FermionGASCF(ABC):
 
         self.filling = Ne/Moff[-1]
 
+        self._Cdict = {}
+        for M in set(self.M):
+            self._Cdict[M] = _get_annahilation_operators(M)
+
     @abstractmethod
     def get_ht(self, I):
         r"""
@@ -285,7 +289,7 @@ class FermionGASCF(ABC):
         return T, Tsrc
 
     
-    def _compute_Hqp(self, L, R, tarr=None):
+    def _compute_Hqp(self, L, R, tarr):
         r"""
         Compute
 
@@ -297,8 +301,6 @@ class FermionGASCF(ABC):
         in the single-particle basis.
         """
         N = self.N
-        if (tarr is None):
-            tarr = self._get_tarr()
         t = np.block(tarr.tolist())
         Rblock = scipy.linalg.block_diag(*R)
         
@@ -311,7 +313,7 @@ class FermionGASCF(ABC):
 
         return Hqp
     
-    def _compute_Hemb(self, I, Lc, C=None):
+    def _compute_Hemb(self, I, Lc):
         r"""
         Compute
 
@@ -326,8 +328,7 @@ class FermionGASCF(ABC):
         # get coefficients for embedding Hamiltonian
         h = self._get_ht(I)
         U = self._get_U(I)
-        if (C is None):
-            C = _get_annahilation_operators(M)
+        C = self._Cdict[M]
         # construct local Hamiltonian
         Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))
         Hloc += sum(U[a, b, c, d] * C[a].T @ C[b].T @ C[c] @ C[d] for a in range(M) for b in range(M) for c in range(M) for d in range(M))
@@ -365,7 +366,8 @@ class FermionGASCF(ABC):
         
         # calculate Hqp and energies of filled eigenstates
         R = self._compute_renormalizations(psiarr, n)
-        Hqp = self._compute_Hqp(L, R)
+        tarr = self._get_tarr()
+        Hqp = self._compute_Hqp(L, R, tarr)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         Lag += sum(qp_energy[i] for i in range(self.Ne))
 
@@ -420,16 +422,13 @@ class FermionGASCF(ABC):
         N = self.N
         psiarr, L, Lc, n, Ec = self._unpack_vector(x)
         tarr = self._get_tarr()
-        Cdict = {}
-        for M in set(self.M):
-            Cdict[M] = _get_annahilation_operators(M)
 
         # get energy gradients
         grad_Ec = [1 - (psiarr[I].T.conj() @ psiarr[I]) for I in range(N)]
 
         # get quasiparticle and embedding Hamiltonians
         R = self._compute_renormalizations(psiarr, n)
-        Hqp = self._compute_Hqp(L, R, tarr=tarr)
+        Hqp = self._compute_Hqp(L, R, tarr)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
 
         # compute single particle correlations
@@ -440,12 +439,12 @@ class FermionGASCF(ABC):
         grad_psiarr = []
         for K in range(N):
             M = self.M[K]
-            C = Cdict[M]
+            C = self._Cdict[M]
             nK = n[K]
             B = np.diag(1/np.sqrt(nK*(1- nK)))
             
             # construct derivative Hamiltonian
-            HD = self._compute_Hemb(K, Lc, C=C) - Ec[K]*np.eye(4**M)
+            HD = self._compute_Hemb(K, Lc) - Ec[K]*np.eye(4**M)
             HDqp = np.zeros((4**M, 4**M), dtype=np.complex128)
             for I in range(N):
                 M1 = tarr[I, K].T @ R[I] @ self._get_block(corr, I, K) @ B
@@ -472,7 +471,7 @@ class FermionGASCF(ABC):
         for I in range(N):
             M = self.M[I]
             Lm = np.zeros((M,M), dtype=np.complex128)
-            C = Cdict[M]
+            C = self._Cdict[M]
             psivec = psiarr[I]
             for a in range(M):
                 for b in range(M):
@@ -521,6 +520,29 @@ class FermionGASCF(ABC):
         Ec = np.zeros(N)
         return self._pack_vector(psiarr, L, Lc, narr, Ec)
 
+    def _compute_1body_correlations(self, qp_coeff, R, psiarr):
+        r"""
+        Compute physical 1-body correlations under :math:`\ket{\Psi_G}` using:
+
+        :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Jb} \ket{\Psi_G} = \sum_{cd} \left[ \mathcal{R}^I_{ac} \Delta^{IJ}_{cd} \mathcal{R}^{J*}_{bd} \right]`
+        for :math:`I \neq J`.
+
+        :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} \ket{\Psi_G} = \text{Tr} \left[ \phi_I^\dagger c^\dagger_a c_b \phi_I  \right]` for each :math:`I`.
+        """
+        occ = [(i < self.Ne) for i in range(self._Moff[-1])]
+        corr = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
+        Rblock = scipy.linalg.block_diag(*R)
+        expcorr = Rblock @ corr @ Rblock.T.conj()
+        for I in range(self.N):
+            psi = get_psi_matrix(psiarr[I])
+            M = self.M[I]
+            C = self._Cdict[M]
+            for a in range(M):
+                for b in range(M):
+                    expcorr[self._Moff[I]+a, self._Moff[I]+b] = np.trace(psi.conj().T @ C[a].T @ C[b] @ psi)
+
+        return expcorr
+
     def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, x=False, verbose=True):
         r"""
         Use root finding (via scipy.optimize.root) on the gradient to calculate the ground state via Newton's method
@@ -549,33 +571,14 @@ class FermionGASCF(ABC):
         # parse result
         psiarr, L, Lc, n, Ec = self._unpack_vector(result.x)
         R = self._compute_renormalizations(psiarr, n)
-        Hqp = self._compute_Hqp(L, R)
+        tarr = self._get_tarr()
+        Hqp = self._compute_Hqp(L, R, tarr)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
-        occ = [(i < self.Ne) for i in range(self._Moff[-1])]
-        corr = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
         E = self._compute_lagrangian(result.x)
+        if (not x):
+            result.pop("x")
 
-        # compute 1-body correlations, then fix diagonal blocks
-        r"""
-        :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Jb} \ket{\Psi_G} = \sum_{cd} \left[ \mathcal{R}^I_{ac} \Delta^{IJ}_{cd} \mathcal{R}^{J*}_{bd} \right]`
-        for :math:`I \neq J`
-        """
-        Rblock = scipy.linalg.block_diag(*R)
-        expcorr = Rblock @ corr @ Rblock.T.conj()
-        Cdict = {}
-        for M in set(self.M):
-            Cdict[M] = _get_annahilation_operators(M)
-        for I in range(N):
-            r"""
-            :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} \ket{\Psi_G} = \text{Tr} \left[ \phi_I^\dagger c^\dagger_a c_b \phi_I  \right]`
-            """
-            psi = get_psi_matrix(psiarr[I])
-            M = self.M[I]
-            C = Cdict[M]
-            for a in range(M):
-                for b in range(M):
-                    expcorr[self._Moff[I]+a, self._Moff[I]+b] = np.trace(psi.conj().T @ C[a].T @ C[b] @ psi)
-
+        expcorr = self._compute_1body_correlations(qp_coeff, R, psiarr)
         T, Tsrc = self._compute_density_renormalizations(psiarr, n)
 
         return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec, T=T, Tsrc=Tsrc, result=result, corr=expcorr)

@@ -15,23 +15,30 @@
 #
 
 
-r"""Extended GA method for eleectron-boson interaction and non-local correlation
+from openms.gwf.orig import ga_local
 
-Brief introduction to the theoretical background:
+class GASCF(ga_local.GASCF):
+    r"""Extended GA method for non-local correlation
 
-The Hamiltonain is
+    Brief introduction to the theoretical background:
 
-.. math::
+    The Hamiltonain is
 
-   \hat{H} = &  \\
-           = &
-"""
+    .. math::
+        H = \sum_I H^{loc}_I + \sum_{I\neq J} H^{loc}_{IJ}
 
-from openms.gwf import ga_nonlocal
+    In general, the non-local correlation can contains three-site and four-site
+    correlations. Here, we only consider the two-site correlation.
 
-class GASCF(ga_nonlocal.GASCF):
+    And we assume the following formula for the two-site correlaiton:
+
+    .. math::
+        H_{IJ} = \sum_{pqrs} J_{IJ} n_{I, pq} n_{J, rs}
+
+    which is dipole-dipole-like two-site interaction.
+
+
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-    def update_renormalizations(self, dm):
-        pass

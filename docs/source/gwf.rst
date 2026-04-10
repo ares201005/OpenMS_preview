@@ -57,7 +57,7 @@ Gutzwiller approximation (GA):
 Single-band Gutzwiller method
 =============================
 
-.. automodule:: openms.gwf.ga_sband
+.. automodule:: openms.gwf.orig.ga_sband
    :members:
    :undoc-members:
    :show-inheritance:
@@ -81,7 +81,7 @@ Private API
 
 .. automodule:: openms.gwf.ga_mband
    :member-order: bysource
-   :private-members: _compute_rdm, _compute_renormalizations, _compute_density_renormalizations, _compute_Hqp, _compute_Hemb, _compute_lagrangian, _compute_gradient
+   :private-members: _compute_rdm, _compute_renormalizations, _compute_density_renormalizations, _compute_Hqp, _compute_Hemb, _compute_lagrangian, _compute_gradient, _compute_1body_correlations
    :members:
    :undoc-members:
    :show-inheritance:
@@ -90,7 +90,7 @@ Private API
 
 ga_local.GASCF
 -------------------------
-.. automodule:: openms.gwf.ga_local
+.. automodule:: openms.gwf.orig.ga_local
    :members:
    :undoc-members:
    :show-inheritance:
@@ -99,7 +99,7 @@ ga_local.GASCF
 Multi-band Gutzwiller method for nonlocal correlation
 =====================================================
 
-.. automodule:: openms.gwf.ga_nonlocal
+.. automodule:: openms.gwf.orig.ga_nonlocal
    :members:
    :undoc-members:
    :show-inheritance:
@@ -107,7 +107,7 @@ Multi-band Gutzwiller method for nonlocal correlation
 Multi-band Gutzwiller method for electron-boson interactions
 ============================================================
 
-.. automodule:: openms.gwf.ga_eph
+.. automodule:: openms.gwf.orig.ga_eph
    :members:
    :undoc-members:
    :show-inheritance:

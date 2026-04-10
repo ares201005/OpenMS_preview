@@ -363,7 +363,7 @@ def gwf_fvec():
 
     pass
 
-from openms.gwf import ga_sband
+from openms.gwf.orig import ga_sband
 
 class GASCF(ga_sband.GASCF):
     # class HF(lib.StreamObject):

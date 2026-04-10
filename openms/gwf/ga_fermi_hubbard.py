@@ -86,25 +86,24 @@ class FermiHubbard(FermionGASCF):
         print(f"correlation computed Ne = {sum(np.trace(res.get_1body_corr(I, I)) for I in range(self.N))}")
         print(f"E = {res.E}")
         
-        qS, S = self._spin_structure_factor(res)
-        qN, N = self._charge_structure_factor(res)
+        # qS, S = self._spin_structure_factor(res)
+        # qN, N = self._charge_structure_factor(res)
 
-        plt.figure()
-        plt.title(self.msg)
-        plt.plot(qS, S, label="Spin structure factor S(q)")
-        plt.plot(qN, N, label="Charge structure factor N(q)")
-        plt.xlabel("q")
-        plt.ylabel("Structure factor")
-        plt.legend()
-        plt.savefig("results/sf_plot.png")
-        plt.show()
+        # plt.figure()
+        # plt.title(self.msg)
+        # plt.plot(qS, S, label="Spin structure factor S(q)")
+        # plt.plot(qN, N, label="Charge structure factor N(q)")
+        # plt.xlabel("q")
+        # plt.ylabel("Structure factor")
+        # plt.legend()
+        # plt.savefig("results/sf_plot.png")
+        # plt.show()
 
         breakpoint()
 
 if __name__ == '__main__':
-    PBC = False
     if (len(argv) <= 3):
-        gamf = FermiHubbard(PBC=PBC)
+        gamf = FermiHubbard()
         if (len(argv) == 1):
             gamf.kernel()
         elif (len(argv) == 2):
@@ -112,7 +111,7 @@ if __name__ == '__main__':
         elif (len(argv) == 3):
             gamf.kernel(method=argv[1], tolerance=float(argv[2]))
     elif (len(argv) <= 5):
-        gamf = FermiHubbard(N=int(argv[3]), PBC=PBC)
+        gamf = FermiHubbard(N=int(argv[3]))
         if (len(argv) == 4):
             gamf.kernel(method=argv[1], tolerance=float(argv[2]))
         elif (len(argv) == 5):

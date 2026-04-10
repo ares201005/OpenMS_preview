@@ -122,8 +122,6 @@ from pyscf.lib import logger
 from pyscf import lib
 from pyscf import __config__
 
-from pdb import set_trace as st
-
 
 WITH_META_LOWDIN = getattr(__config__, "scf_analyze_with_meta_lowdin", True)
 PRE_ORTH_METHOD = getattr(__config__, "scf_analyze_pre_orth_method", "ANO")
@@ -274,7 +272,7 @@ def kernel(
 
         # update var_params (f, or phi) and lambda
         ga.update_var_params(dm)
-        st()
+        breakpoint()
         err = ga.update_lambda(dm)
         delta_f = fold - ga.f
 
@@ -335,7 +333,7 @@ def gwf_rl_step():
 
     # calc_da()
 
-    # calc_vdc_list()
+    # calc_vdc_libreakpoint()
 
     # calc_lambdac()
 

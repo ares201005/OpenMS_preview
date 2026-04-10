@@ -86,7 +86,7 @@ class GASCF:
     def _get_tt(self, I, J):
         return self.t[I, J]
 
-    def _get_annahilation_operators(self, M):
+    def _get_annihilation_operators(self, M):
         C = np.zeros((M, 2**M, 2**M))
         for i in range(M):
             for state in range(2**M):
@@ -98,7 +98,7 @@ class GASCF:
         for I in range(self._N):
             # get local state and correlation
             M = self._M
-            C = self._get_annahilation_operators(M)
+            C = self._get_annihilation_operators(M)
             Delta = self._C[I, I]
             B = scipy.linalg.sqrtm(np.linalg.inv(Delta @ (np.eye(M) - Delta)))
             phi = self.phi[I]
@@ -158,7 +158,7 @@ class GASCF:
             # calculate Lagrange multipliers
             D = sum((self._get_tt(I, J) @ self.R[J].conj() @ self._C[I, J].T @ B.T) for J in range(N))
 
-            C = self._get_annahilation_operators(M)
+            C = self._get_annihilation_operators(M)
             
             # construct local Hamiltonian
             Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))

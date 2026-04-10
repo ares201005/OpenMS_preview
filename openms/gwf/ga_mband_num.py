@@ -27,7 +27,7 @@ def get_psi_vector(psi):
             vec[Gamma*a + n] = psi[Gamma, n]
     return vec
 
-def _get_annahilation_operators(M):
+def _get_annihilation_operators(M):
     C = np.zeros((M, 2**M, 2**M))
     for i in range(M):
         for state in range(2**M):
@@ -49,7 +49,7 @@ def _compute_rdm(Delta):
     """
     M, _ = Delta.shape
     K = scipy.linalg.logm((np.eye(M) - Delta) @ np.linalg.inv(Delta))
-    C = _get_annahilation_operators(M)
+    C = _get_annihilation_operators(M)
     rho = scipy.linalg.expm(sum(-K[a, b] * C[a].T @ C[b] for a in range(M) for b in range(M)))
     return (1/np.trace(rho)) * rho
 
@@ -226,7 +226,7 @@ class FermionGASCF(ABC):
         for I in range(self.N):
             # get local state and correlation
             M = self.M[I]
-            C = _get_annahilation_operators(M)
+            C = _get_annihilation_operators(M)
             nI = n[I]
             psi = psiarr[I]
 
@@ -251,7 +251,7 @@ class FermionGASCF(ABC):
         """
         Xdict = {}
         for M in set(self.M):
-            C = _get_annahilation_operators(M)
+            C = _get_annihilation_operators(M)
             X = np.zeros((M,M,2**M, 2**M))
             for a in range(M):
                 for b in range(M):
@@ -326,7 +326,7 @@ class FermionGASCF(ABC):
         h = self._get_ht(I)
         U = self._get_U(I)
         if (C is None):
-            C = _get_annahilation_operators(M)
+            C = _get_annihilation_operators(M)
         # construct local Hamiltonian
         Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))
         Hloc += sum(U[a, b, c, d] * C[a].T @ C[b].T @ C[c] @ C[d] for a in range(M) for b in range(M) for c in range(M) for d in range(M))
@@ -437,7 +437,7 @@ class FermionGASCF(ABC):
         tarr = self._get_tarr()
         Cdict = {}
         for M in set(self.M):
-            Cdict[M] = _get_annahilation_operators(M)
+            Cdict[M] = _get_annihilation_operators(M)
 
         # get energy gradients
         grad_Ec = [1 - (psiarr[I].T.conj() @ psiarr[I]) for I in range(N)]
@@ -579,7 +579,7 @@ class FermionGASCF(ABC):
         expcorr = Rblock @ corr @ Rblock.T.conj()
         Cdict = {}
         for M in set(self.M):
-            Cdict[M] = _get_annahilation_operators(M)
+            Cdict[M] = _get_annihilation_operators(M)
         for I in range(N):
             r"""
             :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} \ket{\Psi_G} = \text{Tr} \left[ \phi_I^\dagger c^\dagger_a c_b \phi_I  \right]`
@@ -652,7 +652,7 @@ class FermionGASCFResult:
             """
             M = MI
             psi = self.psiarr[I]
-            C = _get_annahilation_operators(M)
+            C = _get_annihilation_operators(M)
             for a in range(M):
                 for b in range(M):
                     for c in range(M):
