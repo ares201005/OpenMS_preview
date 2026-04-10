@@ -1,110 +1,9 @@
 import numpy as np
-from abc import abstractmethod
 import matplotlib.pyplot as plt
-from ga_mband_args import FermionGASCF, FermionGASCFResult
-
-# return boson annihilation operator with M excitations
-def _get_annihilation_operator(M):
-    B = np.zeros((M, M))
-    for n in range(1, M):
-        B[n-1, n] = np.sqrt(n)
-    return B
-
-class FermiBoseGASCFResult(FermionGASCFResult):
-    def __init__(self, c, *args, **kwargs):
-        self.c = c
-        super().__init(*args, **kwargs)
-
-
-class FermiBoseGASCF(FermionGASCF):
-    def __init__(self, BM, omega, *args):
-        self.BN = len(BM)
-        if (len(omega) != self.BN):
-            raise ValueError("Number of modes is not consistent")
-        self.BM = BM
-        self.omega = [omega]
-        self._nfock = np.prod(BM)
-        super().__init__(*args)
-
-    def boson_tuple_to_idx(self, tup):
-        BN = self.BN
-        if (len(tup) != BN):
-            raise ValueError("Tuple does not correspond to a valid Fock state")
-        idx = tup[-1]
-        if not (0 <= idx < self.BM[-1]):
-            raise ValueError(f"Invalid occupation number {idx} for mode {BN-1}")
-        for i in range(BN - 1):
-            j = BN - 2 - i
-            n = tup[j]
-            b = self.BM[j]
-            if not (0 <= n < b):
-                raise ValueError(f"Invalid occupation number {n} for mode {j}")
-            idx = n + (idx * b)
-        return idx
-
-    def boson_idx_to_tuple(self, idx):
-        if not (0 <= idx < self._nfock):
-            raise ValueError("Index does not correspond to a valid Fock state")
-        BN = self.BN
-        tup = [0] * BN
-        for nu in range(BN):
-            idx, tup[nu] = divmod(idx, self.BM[nu])
-        return tuple(tup)
-
-    @abstractmethod  
-    def get_g(self, nu, I, J):
-        pass
-
-    def _get_g(self, nu, I, J):
-        res = self.get_g(nu, I, J)
-        if (res.shape != (self.M[I], self.M[J])):
-            raise ValueError(f"g{nu}[{I}, {J}] has incorrect shape")
-        return res
-
-    @abstractmethod
-    def get_h(self, I):
-        pass
-    
-    def get_ht(self, I):
-        return self.get_h(I)
-    
-    @abstractmethod
-    def get_t(self, I, J):
-        pass
-    
-    def get_tt(self, I, J):
-        return self.get_t(I, J)
-    
-    def _get_annahilation_operator(self, nu):
-        B = np.eye(int(np.prod(self.BM[:nu])))
-        B = np.kron(_get_annihilation_operator(self.BM[nu]), B)
-        B = np.kron(np.eye(int(np.prod(self.BM[nu+1:]))), B)
-        return B
-    
-    def _pack_boson_vector(self, x, c):
-        assert (len(c) == self._nfock)
-        return np.concatenate([x, c.real, c.imag])
-    
-    def _unpack_boson_vector(self, y):
-        nfock = self._nfock
-        assert (len(y) > 2*nfock)
-        x = y[:-2*nfock]
-        re = y[-2*nfock:-nfock]
-        im = y[-nfock:]
-        c = re + 1j*im
-        return x, c
-    
-    # def _compute_lagrangian(self, y):
-    #     x, c = self._unpack_boson_vector(y)
-    #     Lag = super()._compute_lagrangian(x, c)
-    #     return Lag
-    
-    # def kernel(self, *args, **kwargs):
-    #     breakpoint()
-
+from ga_fermi_bose_args import FermiBoseGASCF
 
 class HubbardHolstein(FermiBoseGASCF):
-    def __init__(self, N=12, filling=0.5, U=1.0, t=-1.0, J=-1.0, g=0.0, omega=1.0, nstates=3, PBC=False):
+    def __init__(self, N=12, filling=0.5, U=1.0, t=-1.0, J=-1.0, g=3.0, omega=0.5, nstates=5, PBC=False):
         if (N <= 0):
             raise ValueError("number of sites must be positive")
         if ((filling <= 0) or (filling >= 1)):
@@ -115,7 +14,7 @@ class HubbardHolstein(FermiBoseGASCF):
         self.t = (t*np.eye(2)) + (J*np.array([[-1, 1], [1, -1]]))
         self.g = g * np.sqrt(omega/2) * np.eye(2)
         self.PBC = PBC
-        self.msg = f"N={N}, t={t}, U={U}, J={J}, PBC={PBC}, filling={Ne/(N*2)}"
+        self.msg = f"N={N}, t={t}, U={U}, J={J}, g={g}, omega={omega}, PBC={PBC}, filling={Ne/(N*2)}"
         super().__init__([nstates], [omega], N*[2], Ne)
 
     def get_h(self, I):
@@ -133,7 +32,9 @@ class HubbardHolstein(FermiBoseGASCF):
         return np.zeros((2,2))
 
     def get_g(self, nu, I, J):
-        return self.g
+        if (I == J):
+            return self.g
+        return np.zeros((2,2))
     
     def _compute_structure_factor(self, A):
         # Returns S(k_m) on the natural OBC/PBC momentum grid.

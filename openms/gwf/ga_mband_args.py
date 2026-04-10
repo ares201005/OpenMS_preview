@@ -492,7 +492,11 @@ class FermionGASCF(ABC):
         # return packed vector wrt x and y derivatives
         f = lambda grad: [2*G.conj() for G in grad]
         g = lambda grad: [2*G for G in grad]
-        return self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), grad_n, grad_Ec)
+        ret = self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), grad_n, grad_Ec)
+
+        if (len(args) > 0):
+            return ret, self._compute_1body_correlations(qp_coeff, R, psiarr)
+        return ret
 
     def _get_initial_guess(self):
         # initialize all psi to uniformly id on each block (unentangled)
@@ -542,8 +546,39 @@ class FermionGASCF(ABC):
                     expcorr[self._Moff[I]+a, self._Moff[I]+b] = np.trace(psi.conj().T @ C[a].T @ C[b] @ psi)
 
         return expcorr
+    
+    def _get_result(self, method, maxiter, x0, tolerance, verbose):
+        # create initial guess and solve
+        if (x0 is None):
+            x0 = self._get_initial_guess()
+        options = {}
+        if maxiter:
+            options['maxiter'] = maxiter
+        if verbose:
+            options['disp'] = True
+        options['fatol'] = tolerance
+        return scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
+    
+    def _parse_result(self, result, keep, *args, x=None):
+        # parse result
+        if (x is None):
+            x = result.x
+        psiarr, L, Lc, n, Ec = self._unpack_vector(x)
+        R = self._compute_renormalizations(psiarr, n)
+        tarr = self._get_tarr(*args)
+        Hqp = self._compute_Hqp(L, R, tarr)
+        qp_energy, qp_coeff = np.linalg.eigh(Hqp)
+        E = self._compute_lagrangian(result.x)
+        if (not keep):
+            result.pop("x")
 
-    def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, x=False, verbose=True):
+        expcorr = self._compute_1body_correlations(qp_coeff, R, psiarr)
+        T, Tsrc = self._compute_density_renormalizations(psiarr, n)
+
+        return (self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec), {"T":T, "Tsrc":Tsrc, "result":result, "corr":expcorr}
+
+
+    def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, keep=False, verbose=True):
         r"""
         Use root finding (via scipy.optimize.root) on the gradient to calculate the ground state via Newton's method
 
@@ -556,32 +591,10 @@ class FermionGASCF(ABC):
 
         The kernel returns a ``FermionGASCFResult`` object that can be queried for success status and values of Lagrange multipliers, Gutzwiller parameters and projectors, and correlation functions.
         """
-        # create initial guess and solve
-        N = self.N
-        if (x0 is None):
-            x0 = self._get_initial_guess()
-        options = {}
-        if maxiter:
-            options['maxiter'] = maxiter
-        if verbose:
-            options['disp'] = True
-        options['fatol'] = tolerance
-        result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
+        result = self._get_result(method, maxiter, x0, tolerance, verbose)
+        rargs, rkwargs = self._parse_result(result, keep)
 
-        # parse result
-        psiarr, L, Lc, n, Ec = self._unpack_vector(result.x)
-        R = self._compute_renormalizations(psiarr, n)
-        tarr = self._get_tarr()
-        Hqp = self._compute_Hqp(L, R, tarr)
-        qp_energy, qp_coeff = np.linalg.eigh(Hqp)
-        E = self._compute_lagrangian(result.x)
-        if (not x):
-            result.pop("x")
-
-        expcorr = self._compute_1body_correlations(qp_coeff, R, psiarr)
-        T, Tsrc = self._compute_density_renormalizations(psiarr, n)
-
-        return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec, T=T, Tsrc=Tsrc, result=result, corr=expcorr)
+        return FermionGASCFResult(*rargs, **rkwargs)
     
 class FermionGASCFResult:
     def __init__(self, Moff, Ne, E, psiarr, L, Lc, n, Ec, T=None, Tsrc=None, result=None, corr=None):
