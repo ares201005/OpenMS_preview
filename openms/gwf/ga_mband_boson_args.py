@@ -131,9 +131,7 @@ class FermiBoseGASCF(FermionGASCF):
                 for J in range(N):
                     Garr[I, J] = self._get_g(nu, I, J)
             Gnu = np.block(Garr.tolist())
-            a = 0
-            for i in range(self._Moff[-1]):
-                a += np.dot(Gnu[i, :], expcorr[i, :])
+            a = sum(np.dot(Gnu[i, :], expcorr[i, :]) for i in range(self._Moff[-1]))
             grad_c += (a*B.T + a.conj()*B) @ c
 
         grad_Eb = 1 - (np.linalg.norm(c)**2)
@@ -146,7 +144,6 @@ class FermiBoseGASCF(FermionGASCF):
         c = np.zeros(self._nfock, dtype=np.complex128)
         c[0] = 1
         Eb = 0.5*sum(self.omega)
-
         return self._pack_boson_vector(fermion_guess, c, Eb)
     
     def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, keep=False, verbose=True):

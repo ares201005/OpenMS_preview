@@ -140,9 +140,7 @@ class FermiBoseGASCF(FermionGASCF):
                     for J in range(N):
                         Garr[I, J] = self._get_g(nu, I, J)
                 Gnu = np.block(Garr.tolist())
-                a = 0
-                for i in range(self._Moff[-1]):
-                    a += np.dot(Gnu[i, :], expcorr[i, :])
+                a = sum(np.dot(Gnu[i, :], expcorr[i, :]) for i in range(self._Moff[-1]))
                 Hlin += a*B.T
             Hb += Hlin + Hlin.conj().T
 
