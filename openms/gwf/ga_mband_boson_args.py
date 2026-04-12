@@ -89,7 +89,6 @@ class FermiBoseGASCF(FermionGASCF):
         return self._pack_boson_vector(fermion_guess, beta)
     
     def kernel(self, method="krylov", maxiter=None, x0=None, beta0=None, tolerance=1e-4, keep=False, verbose=True):
-        beta0 = np.zeros(self.BN, dtype=np.complex128)
         result = self._get_result(method, maxiter, x0, tolerance, verbose, beta0)
         x_fermion, beta = self._unpack_boson_vector(result.x)
         rargs, rkwargs = self._parse_result(result, keep, beta, x=x_fermion)
