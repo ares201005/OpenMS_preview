@@ -547,10 +547,10 @@ class FermionGASCF(ABC):
 
         return expcorr
     
-    def _get_result(self, method, maxiter, x0, tolerance, verbose):
+    def _get_result(self, method, maxiter, x0, tolerance, verbose, *args):
         # create initial guess and solve
         if (x0 is None):
-            x0 = self._get_initial_guess()
+            x0 = self._get_initial_guess(*args)
         options = {}
         if maxiter:
             options['maxiter'] = maxiter
@@ -610,8 +610,8 @@ class FermionGASCFResult:
         self.Ec = Ec
         self.result = result
         self.corr = corr
-        self._number = (T is not None) and (Tsrc is not None)
-        if self._number:
+        self._has_T = (T is not None) and (Tsrc is not None)
+        if self._has_T:
             self._T = T
             self._Tsrc = Tsrc
             TD = []
@@ -642,7 +642,7 @@ class FermionGASCFResult:
         r"""
         Return the tensor :math:`M_{abcd} = \bra{\Psi_G} c^\dagger_{Ia} c_{Ib} c^\dagger_{Jc} c_{Jd} \ket{\Psi_G}`.
         """
-        if not self._number:
+        if not self._has_T:
             return None
         MI = self._Moff[I+1]-self._Moff[I]
         MJ = self._Moff[J+1]-self._Moff[J]

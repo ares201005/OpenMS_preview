@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from ga_mband_boson import FermiBoseGASCF
 
 class HubbardHolstein(FermiBoseGASCF):
-    def __init__(self, N=12, filling=0.5, U=2.0, t=-1.0, J=-1.0, g=0.4, omega=1.0, nstates=15, PBC=False):
+    def __init__(self, N=12, filling=0.5, U=2.0, t=-1.0, J=-1.0, g=0.4, omega=1.0, PBC=False):
         if (N <= 0):
             raise ValueError("number of sites must be positive")
         if ((filling <= 0) or (filling >= 1)):
@@ -15,7 +15,7 @@ class HubbardHolstein(FermiBoseGASCF):
         self.g = g * np.sqrt(omega/2) * np.eye(2)
         self.PBC = PBC
         self.msg = f"N={N}, t={t}, U={U}, J={J}, g={g}, omega={omega}, PBC={PBC}, filling={Ne/(N*2)}"
-        super().__init__([nstates], [omega], N*[2], Ne)
+        super().__init__([omega], N*[2], Ne)
 
     def get_h(self, I):
         return np.zeros((2,2))
@@ -89,6 +89,7 @@ class HubbardHolstein(FermiBoseGASCF):
         print(f"self.Ne = {self.Ne}")
         print(f"Delta computed Ne = {sum(np.trace(res.Delta(I)) for I in range(self.N))}")
         print(f"correlation computed Ne = {sum(np.trace(res.get_1body_corr(I, I)) for I in range(self.N))}")
+        print(f"<N> = {res.get_boson_number(0)}")
         print(f"E = {res.E}")
         
         qS, S = self._spin_structure_factor(res)
