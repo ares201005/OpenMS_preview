@@ -126,7 +126,7 @@ class FermiBoseGASCF(FermionGASCF):
     def _compute_gradient(self, y):
         N = self.N
         x, c, Eb = self._unpack_boson_vector(y)
-        fermion_grad, expcorr = super()._compute_gradient(x, c)
+        fermion_grad, expcorr = super()._compute_gradient(x, c, expcorr=True)
 
         # compute gradient wrt cm*
         grad_c = -Eb * c

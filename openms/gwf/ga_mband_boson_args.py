@@ -65,7 +65,7 @@ class FermiBoseGASCF(FermionGASCF):
     def _compute_gradient(self, y):
         N = self.N
         x, beta = self._unpack_boson_vector(y)
-        fermion_grad, expcorr = super()._compute_gradient(x, beta)
+        fermion_grad, expcorr = super()._compute_gradient(x, beta, expcorr=True)
 
         # compute gradient wrt beta_nu*
         grad_beta = np.zeros(self.BN, dtype=np.complex128)
@@ -97,6 +97,7 @@ class FermiBoseGASCF(FermionGASCF):
 class FermiBoseGASCFResult(FermionGASCFResult):
     def __init__(self, beta, *args, **kwargs):
         self.beta = beta
+        self.boson_number = np.abs(beta)**2
         self.BN = len(beta)
         super().__init__(*args, **kwargs)
 
@@ -104,4 +105,4 @@ class FermiBoseGASCFResult(FermionGASCFResult):
         return self.beta[nu]
     
     def get_boson_number(self, nu):
-        return np.abs(self.beta[nu])**2
+        return self.boson_number[nu]

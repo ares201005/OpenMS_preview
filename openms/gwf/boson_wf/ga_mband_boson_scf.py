@@ -108,7 +108,7 @@ class FermiBoseGASCF(FermionGASCF):
             Lag += np.dot(self.boson_idx_to_array(m) + 0.5, self.omega) * (np.linalg.norm(c[m])**2)
         return Lag
     
-    def kernel(self, etol=1e-6, c0=None, verbose=True, **kwargs):
+    def kernel(self, etol=1e-6, x0=None, x=False, c0=None, verbose=True, **kwargs):
         N = self.N
         if (c0 is None):
             self._c = np.zeros(self._nfock, dtype=np.complex128)
@@ -122,7 +122,7 @@ class FermiBoseGASCF(FermionGASCF):
             # solve fermion problem and check for convergence
             if verbose:
                 print(f"c = {self._c}")
-            fermion_res = super().kernel(verbose=verbose, **kwargs)
+            fermion_res = super().kernel(x0=x0, x=True, verbose=verbose, **kwargs)
             E = fermion_res.E
 
             if initialized:
@@ -136,6 +136,7 @@ class FermiBoseGASCF(FermionGASCF):
                 if verbose:
                     print(f"E = {E}")
             prev_E = E
+            x0 = fermion_res.result.x
 
             # construct Hb
             expcorr = fermion_res.corr
@@ -159,6 +160,9 @@ class FermiBoseGASCF(FermionGASCF):
             eigval, eigvec = np.linalg.eigh(Hb)
             self._c = eigvec[:, 0]
 
+        if (not x):
+            fermion_res.result.pop("x")
+            
         return FermiBoseGASCFResult(fermion_res, self.BM, self._c)
 
 class FermiBoseGASCFResult:

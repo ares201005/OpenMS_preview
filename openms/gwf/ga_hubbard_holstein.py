@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from ga_mband_boson import FermiBoseGASCF
 
 class HubbardHolstein(FermiBoseGASCF):
-    def __init__(self, N=12, filling=0.5, U=2.0, t=-1.0, J=-1.0, g=0.4, omega=1.0, PBC=False):
+    def __init__(self, N=12, filling=0.5, U=2.0, t=-1.0, J=-1.0, g=0.4, omega=0.5, PBC=False):
         if (N <= 0):
             raise ValueError("number of sites must be positive")
         if ((filling <= 0) or (filling >= 1)):

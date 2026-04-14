@@ -385,7 +385,7 @@ class FermionGASCF(ABC):
 
         return Lag.real
 
-    def _compute_gradient(self, x, *args):
+    def _compute_gradient(self, x, *args, expcorr=False):
         r"""
         Compute the first derivatives
 
@@ -493,8 +493,8 @@ class FermionGASCF(ABC):
         f = lambda grad: [2*G.conj() for G in grad]
         g = lambda grad: [2*G for G in grad]
         ret = self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), grad_n, grad_Ec)
-
-        if (len(args) > 0):
+        
+        if expcorr:
             return ret, self._compute_1body_correlations(qp_coeff, R, psiarr)
         return ret
 
@@ -578,7 +578,7 @@ class FermionGASCF(ABC):
         return (self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec), {"T":T, "Tsrc":Tsrc, "result":result, "corr":expcorr}
 
 
-    def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, keep=False, verbose=True):
+    def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, x=False, verbose=True):
         r"""
         Use root finding (via scipy.optimize.root) on the gradient to calculate the ground state via Newton's method
 
@@ -592,7 +592,7 @@ class FermionGASCF(ABC):
         The kernel returns a ``FermionGASCFResult`` object that can be queried for success status and values of Lagrange multipliers, Gutzwiller parameters and projectors, and correlation functions.
         """
         result = self._get_result(method, maxiter, x0, tolerance, verbose)
-        rargs, rkwargs = self._parse_result(result, keep)
+        rargs, rkwargs = self._parse_result(result, x)
 
         return FermionGASCFResult(*rargs, **rkwargs)
     

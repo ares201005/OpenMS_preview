@@ -49,7 +49,7 @@ class FermiBoseGASCF(FermionGASCF):
         Lag += np.dot(np.abs(self._beta)**2 + 0.5, self.omega)
         return Lag
     
-    def kernel(self, etol=1e-6, beta0=None, verbose=True, **kwargs):
+    def kernel(self, etol=1e-6, x0=None, x=False, beta0=None, verbose=True, **kwargs):
         N = self.N
         if (beta0 is None):
             self._beta = np.zeros(self.BN, dtype=np.complex128)
@@ -62,7 +62,7 @@ class FermiBoseGASCF(FermionGASCF):
             # solve fermion problem and check for convergence
             if verbose:
                 print(f"beta = {self._beta}")
-            fermion_res = super().kernel(verbose=verbose, **kwargs)
+            fermion_res = super().kernel(x0=x0, x=True, verbose=verbose, **kwargs)
             E = fermion_res.E
 
             if initialized:
@@ -76,6 +76,7 @@ class FermiBoseGASCF(FermionGASCF):
                 if verbose:
                     print(f"E = {E}")
             prev_E = E
+            x0 = fermion_res.result.x
 
             # compute annihilator expectations
             expcorr = fermion_res.corr
@@ -87,19 +88,23 @@ class FermiBoseGASCF(FermionGASCF):
                 Gnu = np.block(Garr.tolist())
                 self._beta[nu] = -sum(np.dot(Gnu[i, :], expcorr[i, :]) for i in range(self._Moff[-1])) / self.omega[nu]
 
+        if (not x):
+            fermion_res.result.pop("x")
+
         return FermiBoseGASCFResult(fermion_res, self._beta)
 
 class FermiBoseGASCFResult:
     def __init__(self, fermion_result, beta):
         self._fermion_result = fermion_result
         self.beta = beta
+        self.boson_number = np.abs(beta)**2
         self.BN = len(beta)
 
     def get_boson_ann_exp(self, nu):
         return self.beta[nu]
     
     def get_boson_number(self, nu):
-        return np.abs(self.beta[nu])**2
+        return self.boson_number[nu]
     
     def __getattr__(self, name):
         return getattr(self._fermion_result, name)

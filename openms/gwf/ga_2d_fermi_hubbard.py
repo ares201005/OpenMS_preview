@@ -73,4 +73,4 @@ if __name__ == '__main__':
         elif (len(argv) == 5):
             gamf.kernel(method=argv[1], tolerance=float(argv[2]), maxiter=int(argv[4]))
     else:
-        print(f"Usage: {argv[0]} [method] [tolerance] [nsites] [maxiter]")  
+        print(f"Usage: {argv[0]} [method] [tolerance] [nsites] [maxiter]")
