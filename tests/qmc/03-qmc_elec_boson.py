@@ -4,7 +4,7 @@ import numpy
 from pyscf import gto, scf
 from openms.mqed import qedhf
 from openms.qmc.afqmc import AFQMC
-from openms.qmc.tools import get_mean_std
+from openms.qmc.tools import analysis_autocorr
 from molecules import get_mol, get_cavity
 
 def run_fci(mol, cavity_freq, cavity_mode, nphoton=2):
@@ -145,7 +145,9 @@ class TestQMCH2(unittest.TestCase):
                 qed=qeds[itest],
                 decouple=decouples[itest],
             )
-            means[itest], stds[itest] = get_mean_std(energies)
+            results = analysis_autocorr(energies[len(energies)//2:])
+            mean, std = results["etot"][0], results["etot_error"][0]
+            means[itest], stds[itest] = mean, std
 
         # the random number is not the same (for the decoupling of bilinear term)
         # every time step needs to generate Nw more random number, leading
@@ -206,7 +208,9 @@ class TestQMCH2(unittest.TestCase):
                     qed=True,
                     decouple=decouples[j],
                 )
-                means[i, j], stds[i, j] = get_mean_std(energies)
+                results = analysis_autocorr(energies[len(energies)//2:])
+                mean, std = results["etot"][0], results["etot_error"][0]
+                means[i, j], stds[i, j] = mean, std
 
         diff_energies = numpy.zeros((Ng, 2))
         for i in range(Ng):

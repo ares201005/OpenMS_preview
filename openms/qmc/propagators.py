@@ -15,7 +15,6 @@ from openms.qmc.bp import _BPBuffer
 
 
 # this function will be moved into lib/boson
-# 2026-02-19 jzw: lib/boson/displacement_fock() replaces
 @deprecated
 def boson_adag_plus_a(nmodes, boson_states, za):
     r"""
@@ -575,6 +574,8 @@ class Phaseless(PropagatorBase):
     # select right function of computing energy (may use dict)
 
     def local_energy(self, h1e, ltensor, walkers, trial, enuc=0.0):
+        #YZ: the two case can be merged together, the biased measurement is the L_bp->0 limit
+        # or the BP estimator
         if self.L_bp > 0 and self._bpbuf is not None:
             return self._local_energy_bp(h1e, ltensor, walkers, trial, enuc)
         else:
@@ -670,6 +671,7 @@ class Phaseless(PropagatorBase):
         self.wt_onebody += time.time() - t0
         logger.debug(self, f"Debug: time of propagate onebody: { time.time() - t0}")
 
+
     def propagate_HS(self, walkers, ltensor, xshift):
         r"""Propagate the walker WF according to the auxiliary field (HS)"""
         # xshift: [nwalker, nchol]
@@ -763,6 +765,7 @@ class Phaseless(PropagatorBase):
             )
         else:
             # In practice, we will generate random number locally, without scattering
+            # a normal (Gaussian) distribution
             xi = backend.random.normal(
                 0.0, 1.0, (self.nfields + self.num_fake_fields) * walkers.nwalkers
             )
@@ -791,8 +794,21 @@ class Phaseless(PropagatorBase):
         t1 = time.time()
 
         xbar = -backend.sqrt(self.dt) * (1j * self.vbias - self.mf_shift)
+        if hasattr(self, "chol_B"):
+            # add the bosonic mean-field shifts
+            boson_vbias = trial.get_boson_vbias(walkers, self.chol_B)
+            boson_xbar = -backend.sqrt(self.dt) * (1j * boson_vbias - self.boson_mfshift)
+
+            assert (self.nfields - self.nbarefields) == boson_xbar.shape[1]
+            xbar[:, self.nbarefields:self.nfields] += boson_xbar
+
         xbar = self.rescale_fbias(xbar)  # bound of vbias
         xshift = xi - xbar  # [nwalker, nchol]
+
+        if self.nfields > self.nbarefields:
+            self.xi_bilinear = xi[:, self.nbarefields:self.nfields]
+            self.xbar_bilinear = xbar[:, self.nbarefields:self.nfields]
+            self.xshift_bilinear = xshift[:, self.nbarefields:self.nfields]
 
         logger.debug(self, f"Debug: mf_shift.shape = {self.mf_shift.shape}")
         logger.debug(self, f"Debug: vbias.shape = {self.vbias.shape}")
@@ -904,7 +920,7 @@ class Phaseless(PropagatorBase):
         ), "NaN detected in walkers.weights"
         # logger.debug(self, f"updated weight: {walkers.weights}\n eshift = {eshift}")
 
-    def update_weight(self, walkers, ovlp, newovlp, cfb, cmf, eshift=0.0):
+    def update_weight(self, walkers, ovlp, newovlp, cfb, cmf, eshift=0.0, cmf_shift=0.0):
         r"""
         Update the walker coefficients using two different schemes.
 
@@ -950,7 +966,7 @@ class Phaseless(PropagatorBase):
                 -self.dt * (0.5 * (ehybrid + walkers.ehybrid) - eshift)
             )
             walkers.ehybrid = ehybrid
-            phase = (-self.dt * walkers.ehybrid - cfb).imag
+            phase = (-self.dt * walkers.ehybrid - cfb - cmf_shift).imag
             phase_factor = backend.array(
                 [max(0, backend.cos(iphase)) for iphase in phase]
             )
@@ -979,6 +995,15 @@ class FTSweep(Phaseless):
 
     def __init__(self, dt, **kwargs):
         super().__init__(dt, **kwargs)
+
+
+    def propagate_HS(self, phi, ltensor, xshift):
+        r"""Propagate the walker WF according to the auxiliary field (HS)"""
+        # xshift: [nwalker, nchol]
+        # ltensor: [nchol, nao, nao]
+
+        t0 = time.time()
+        sqrtdt = 1j * backend.sqrt(self.dt)
 
 
 class PhaselessBoson(Phaseless):
@@ -1279,13 +1304,13 @@ class PhaselessElecBoson(Phaseless):
         self.geb = geb
 
         self.Hb = hamiltonian_fock(self.system.dim_fock, self.system.boson_freq)
-        # logger.debug(self, f"Debug: Hb = {self.Hb}")
         # nmodes = self.system.nmodes
         # basis = backend.asarray(
         #    [backend.arange(mdim) for mdim in self.system.nboson_states]
         # )
         # waTa = backend.einsum("m, mF->mF", self.system.boson_freq, basis).ravel()
         # self.Hb = backend.diag(waTa)
+        # logger.debug(self, f"Debug: Hb = {self.Hb}")
 
         # if we decouple the bilinear term
         if self.decouple_bilinear:
@@ -1352,23 +1377,23 @@ class PhaselessElecBoson(Phaseless):
         # and only to add the computation of bosonic and electron-boson interacting
         # local energies here
 
+        t0 = time.time()
         etot, norm, e1, e2 = super().local_energy(
             h1e, ltensor[: self.nbarefields], walkers, trial, enuc=enuc
         )
+        t1 = time.time()
 
         # boson energy
         # walkers.boson_Gf = backend.einsum("wi, wj->wij", walkers.boson_phiw, walkers.boson_phiw.conj())
         eb = local_eng_boson(
             self.system.boson_freq, self.system.dim_fock, walkers.boson_Gf
         )
-        # eb = local_eng_boson(
-        #    self.system.boson_freq, self.system.nboson_states, walkers.boson_Gf
-        # )
         # print(f"Debug: Gfavg = {backend.sum(walkers.boson_Gf, axis=0) / walkers.nwalkers}")
         # print(f"Debug: Gf[0] = {walkers.boson_Gf[0]}")
 
         self.update_GF(trial, walkers)
 
+        t2 = time.time()
         # electron-boson interacting energy
         Gfermions = (
             [walkers.Ga, walkers.Gb]
@@ -1382,13 +1407,7 @@ class PhaselessElecBoson(Phaseless):
             Gfermions,
             walkers.boson_Gf,
         )
-        # eg = local_eng_eboson(
-        #    self.system.boson_freq,
-        #    self.system.nboson_states,
-        #    self.geb,
-        #    Gfermions,
-        #    walkers.boson_Gf,
-        # )
+        t3 = time.time()
 
         # update the local energy with eb and eg
         if not self.turnoff_bosons:
@@ -1553,7 +1572,6 @@ class PhaselessElecBoson(Phaseless):
 
         # 2) oei_qed in 1st quantization (TBA)
 
-        #
         # Qalpha = backend.ones(nmode)
 
         # if not False:
@@ -1590,7 +1608,6 @@ class PhaselessElecBoson(Phaseless):
         # else:
         #    walker.ot = ot_new
         #    walker.weight = 0.0
-        #
 
         t0 = time.time()
         if not self.turnoff_bosons:
@@ -1878,18 +1895,20 @@ class PhaselessElecBoson(Phaseless):
             # xi = backend.random.normal(0.0, 1.0, self.nBfields * walkers.nwalkers)
             # xi = xi.reshape(walkers.nwalkers, self.nBfields) # zn (nwalkers, nBfields)
             xi = self.xi_bilinear
+            xshift = self.xshift_bilinear
+            xbar = self.xbar_bilinear
+
             tau = 1j * backend.sqrt(dt)
 
             # Note the electronic part out of the decomposed bilinear has
             # been concatenated into ltensor
 
+            # compute bosonic force bias
             # boson_vbias.shape = (nwalker, nchol)
-            boson_vbias = trial.get_boson_vbias(walkers, self.chol_B)
-
-            # TODO 2026-02-19: Check that the shapes work out properly here
-            xbar = -backend.sqrt(dt) * (1j * boson_vbias - self.boson_mfshift)
-            xbar = self.rescale_fbias(xbar)  # bound of vbias
-            xshift = xi - xbar  # xshift.shape = (nwalker, nchol)
+            # boson_vbias = trial.get_boson_vbias(walkers, self.chol_B)
+            # xbar = -backend.sqrt(dt) * (1j * boson_vbias - self.boson_mfshift)
+            # xbar = self.rescale_fbias(xbar)  # bound of vbias
+            # xshift = xi - xbar  # [nwalker, nchol]
 
             # print(f"boson_vbias   = {1j*boson_vbias}")
             # print(f"boson_mfshift = {self.boson_mfshift}")
@@ -1952,13 +1971,6 @@ class PhaselessElecBoson(Phaseless):
             Gfermions,
             walkers.boson_Gf,
         )
-        # eloc = local_eng_eboson(
-        #    self.system.boson_freq,
-        #    self.system.nboson_states,
-        #    self.geb,
-        #    Gfermions,
-        #    walkers.boson_Gf,
-        # )
         self.e_local_boson = eloc
 
         ##merged into the update_weight()

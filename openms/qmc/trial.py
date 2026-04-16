@@ -148,7 +148,12 @@ import numpy as np
 import h5py
 
 
-def half_rotate_integrals(ncomponents, psia, psib, h1e, ltensor):
+def half_rotate_integrals(
+    ncomponents,
+    psia,
+    psib,
+    h1e,
+    ltensor):
     r"""
     Perform half-rotation of integrals.
 
@@ -421,6 +426,7 @@ def calc_trial_walker_ovlp_gf(walker, trial, return_signs=False):
         Overlap between walker and trial
     """
 
+    t0 = time.time()
     ovlp_a, walker.Ghalfa = trial_walker_ovlp_gf_base_kernel(
         walker.phiwa, trial.psia.astype(np.complex128)
     )
@@ -441,6 +447,7 @@ def calc_trial_walker_ovlp_gf(walker, trial, return_signs=False):
         # compute overlap: size [nwalkers]
         walker.boson_ovlp = trial.boson_ovlp_with_walkers(walker)
         walker.boson_Gf = trial.boson_green_function(walker)
+
         # inv_ovlp = 1.0 / walker.boson_ovlp
         # <n'_1, ..., n'_i, ..., n'_N |a^\dag_i a_j| n_1, ..., n_j, ..., n_N>
         # walker.boson_Gf = backend.einsum(

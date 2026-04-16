@@ -252,7 +252,7 @@ def bilinear_decomposition(Afac, Bfac, chol_eb, decouple_scheme):
     if decouple_scheme == 1:
         # Add the chols due to the decomposition of bilinear term:
         #
-        # 1) Original DSE + terms due tot the decomposition is:
+        # 1) Original DSE + terms due to the decomposition is:
         #     - 1/2 * (A_v\lambda_v\cdot D)^2 + 1/2 * (A_v\lambda_v\cdot D + O_v * X_v)^2
         #                            |                              |
         #           a): \sqrt{1-A_v} chol_eb           b): \sqrt{A_v} * chol_eb

@@ -490,7 +490,7 @@ class RHF(qedhf.RHF):
                                          cholesky_threshold=CHOLESKY_THRESHOLD,
                                          force_pivoted_cholesky=FORCE_PIVOTED_CHOLESKY)
         s1e = self.get_ovlp(self.mol)
-        self.P, self.L = mathlib.full_cholesky_orth(s1e, threshold=1.e-7)
+        self.L, self.P = mathlib.full_cholesky_orth(s1e, threshold=1.e-7)
         self.n_oao = self.P.shape[1]
 
         return self

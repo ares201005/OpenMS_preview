@@ -139,7 +139,9 @@ def kernel(mc, propagator=None, trial=None):
         t0 = time.time()
         tt = mc.dt * step
         dump_result = step % mc.print_freq == 0
-        logger.debug(mc, f"\nDebug: -------------- qmc step {step} -----------------")
+        logger.debug(
+            mc, f"\nDebug: -------------- qmc step {step} -----------------"
+        )
 
         # step 0): periodic re-orthogonalization
         # (FIXME: whether put this at the begining or end, in principle, should not matter)
@@ -476,7 +478,8 @@ class QMCbase(object):
             task_title(f"Get integrals ... Done! Time used: {time.time()-t0: 7.3f} s"),
         )
         if self.geb is not None and not self.propagator_options["turnoff_bosons"]:
-            zalpha = backend.einsum("Xpq, pq->X", self.geb, self.trial.Gf[0])
+
+            zalpha = 2.0 * backend.einsum("Xpq, pq->X", self.geb, self.trial.Gf[0])
             # self.trial.initialize_boson_trial_with_z(zalpha, self.mol.nboson_states)
             self.trial.initialize_boson_trial_with_z(zalpha, self.mol.dim_fock)
             logger.debug(self, f"Debug: initial coherent state is  : {zalpha}")
@@ -805,7 +808,6 @@ class QMCbase(object):
             self.walkers.boson_phiw = backend.einsum(
                 "wam, w -> wam", self.walkers.boson_phiw, norms
             )
-            # self.walkers.boson_phiw = self.walkers.boson_phiw / norms[:, None]
             self.walkers.boson_log_weight += backend.log(norms)
             self.walkers.boson_ovlp = backend.einsum(
                 "am, wam , w -> w",

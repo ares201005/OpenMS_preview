@@ -7,6 +7,7 @@ from openms.lib import NUMBA_AVAILABLE  # , QMCLIB_AVAILABLE
 from openms.lib.boson import hamiltonian_fock, displacement_fock
 from openms.qmc import get_backend
 
+Array = backend.ndarray
 
 # for each observables, we may save several quantities using a small class
 #  to handle the these data
@@ -313,6 +314,8 @@ def local_eng_eb_1st(h1e, eri, gmat, mass, freq, Gf, Q, laplacian, spin_fac=0.5)
 # bosonic energy estimators
 # -----------------------------
 
+# Note that: e_rh1e_Ghalf, ecoul_rltensor_uhf, and exx_rltensor_Ghalf_kernel are
+# also applicable to original integral and un-rorated Gf.
 
 def e_rh1e_Ghalf(rh1e, Ghalf):
     r"""compute one body energy using rotated_h1e and Ghalf"""
@@ -865,6 +868,40 @@ _available_observables = {
     # "occupation": measure_occupation,  # Fermionic occupation
     # "boson_occ": measure_bosonic_occupation,  # occupation of boson
 }
+
+
+#----------------------------------------------------
+# estimators with BP (TBA)
+#----------------------------------------------------
+def GF_bp(L: Array, R: Array) -> Array:
+    r"""Compute BP Green's function G from left and right Slater R states:
+
+    .. math::
+        G = R (L^\dager R)^{-1} L^\dagger,  \text{ with }
+        G_{ij} = \langle c^\dagger_j c_i\rangle.
+    """
+    X = L.conj().T @ R
+    M = np.linalg.inv(X)
+    G = R @ M @ L.conj().T
+    return G
+
+
+def make_rdm2_from_GF(G: Array) -> Array:
+    """Return a function handle to compute RDM2:
+
+    .. math::
+         \Gamma_{i k, j l} = \langle c_i^\dagger  c_k^\dagger c_j c_l\rangle
+
+    via Wick theorem:
+
+    .. math::
+        \Gamma_{i k, j l} = G_{i l} G_{k j} - G_{i j} G_{k l}.
+
+    which avoids constructing the full tensor explicitly.
+    """
+    def Gamma(i, k, j, l):
+        return G[i, l] * G[k, j] - G[i, j] * G[k, l]
+    return Gamma
 
 
 if __name__ == "__main__":

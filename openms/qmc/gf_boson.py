@@ -27,14 +27,14 @@ When both trial and walker are expanded in the bosonic Fock basis:
 
 .. math::
     |\Psi_T> = & \sum_n c_n \ket{n} \\
-    |\phi_w> = & \sum_m a_m \ket{m}
+    |\phi_w> = & \sum_m a^w_m \ket{m}
 
 Here :math:`n` and :math:`m` are occupation vectors :math:`(n_1,\cdots, n_M)` for :math:`M` boson modes/sites.
 
-The Denominator :math:`D = \bra{\Psi_T} \phi_m\rangle` is:
+The Denominator :math:`D = \bra{\Psi_T} \phi_w\rangle` is:
 
 .. math::
-    D = \bra{\Psi_T}\phi\rangle = \sum_{nm} c_n^* a_m \bra{n} m\rangle = \sum_m c_m^* a_m.
+    D = \bra{\Psi_T}\phi_w\rangle = \sum_{nm} c_n^* a^w_m \bra{n} m\rangle = \sum_m c_m^* a^w_m.
 
 i.e., it is an inner product of coefficient vectors.
 
