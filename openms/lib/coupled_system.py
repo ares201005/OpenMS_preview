@@ -251,9 +251,9 @@ class CoupledSystem(Boson):
                     raise ValueError(err_msg)
             else:
                 # Default: all modes polarize along x
-                self.polariz_photon = [np.array([1., 0., 0.]) 
+                self.polariz_photon = [np.array([1., 0., 0.])
                                        for _ in range(self.nphoton)]
-            
+
             # Electron-photon coupling matrices
             if coupling_photon is not None:
                 if isinstance(coupling_photon, list):
@@ -261,12 +261,12 @@ class CoupledSystem(Boson):
                 assert coupling_photon.shape == (self.nmodes, self.nao, self.nao), (
                     "The size of the coupling matrix must be "
                         "(nmodes x nao x nao)!")
-                
+
                 # We do not preprocess the coupling matrices
                 self.coupling_photon = coupling_photon.copy()
             else:
                 # Assume no coupling
-                self.coupling_photon = np.zeros(self.nphoton, 
+                self.coupling_photon = np.zeros(self.nphoton,
                                                    self.mol.nao, self.mol.nao)
 
 
@@ -313,9 +313,9 @@ class CoupledSystem(Boson):
                     raise ValueError(err_msg)
             else:
                 # Default: all modes polarize along x
-                self.polariz_phonon = [np.array([1., 0., 0.]) 
+                self.polariz_phonon = [np.array([1., 0., 0.])
                                        for _ in range(self.nphonon)]
-                
+
             # Electron-phonon coupling matrices
             if coupling_phonon is not None:
                 if isinstance(coupling_phonon, list):
@@ -323,7 +323,7 @@ class CoupledSystem(Boson):
                 assert coupling_phonon.shape == (self.nmodes, self.nao, self.nao), (
                     "The size of the coupling matrix must be "
                         "(nmodes x nao x nao)!")
-                
+
                 # We do not preprocess the coupling matrices
                 self.coupling_phonon = coupling_phonon.copy()
             else:

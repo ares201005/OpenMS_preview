@@ -64,5 +64,15 @@ PYBIND11_MODULE(_qmclib, m) {
           py::arg("shift") = 0.0,
           "Compute displacement matrix");
 
+    m.def("get_JK_cpp", &get_JK_cpp,
+          py::arg("ltensor"),
+          py::arg("dm_do"),
+          py::arg("eta_imode"),
+          py::arg("tau"),
+          py::arg("omega"),
+          py::arg("mdim"),
+          py::arg("pdm"),
+          "Compute Hartree (J) and exchange (K) matrices using OpenMP/C++ kernel");
+
 
 }

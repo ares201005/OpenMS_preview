@@ -121,6 +121,139 @@ std::pair<py::array_t<double>, py::array_t<double>> displacement_matrix_cpp(
 }
 
 
+// helper that computes FC factor matrix for a single (p,q) pair
+static void compute_fc_matrix(
+    int nao,
+    const double *base_diff,
+    double tmp,
+    int mdim,
+    const double *packed_pdm,
+    double shift,
+    double *fc_out
+) {
+    if (mdim == 1) {
+        // vacuum gaussian case
+        for (int r = 0; r < nao; ++r) {
+            for (int s = 0; s < nao; ++s) {
+                double A = tmp * (base_diff[r*nao + s] + shift);
+                fc_out[r*nao + s] = std::exp(-0.5 * A * A);
+            }
+        }
+        return;
+    }
+    int packed_dim = mdim * (mdim + 1) / 2;
+    // compute A array and exponentials
+    std::vector<double> Aarr(nao * nao);
+    for (int r = 0; r < nao; ++r)
+        for (int s = 0; s < nao; ++s)
+            Aarr[r*nao + s] = tmp * (base_diff[r*nao + s] + shift);
+
+    for (int r = 0; r < nao; ++r) {
+        for (int s = 0; s < nao; ++s) {
+            double A = Aarr[r*nao + s];
+            double exponential = std::exp(-0.5 * A * A);
+            double acc = 0.0;
+            int idx = 0;
+            for (int m = 0; m < mdim; ++m) {
+                for (int n = 0; n <= m; ++n) {
+                    double val;
+                    if (m == n) {
+                        val = gsl_sf_laguerre_n(m, 0.0, A*A);
+                    } else {
+                        double ratio = gsl_sf_fact(n) / gsl_sf_fact(m);
+                        val = 2.0 * std::sqrt(ratio)
+                              * std::pow(-A, m - n)
+                              * gsl_sf_laguerre_n(n, m - n, A*A);
+                    }
+                    acc += packed_pdm[idx++] * val;
+                }
+            }
+            fc_out[r*nao + s] = acc * exponential;
+        }
+    }
+}
+
+
+std::pair<py::array_t<double>, py::array_t<double>> get_JK_cpp(
+    py::array_t<double, py::array::c_style | py::array::forcecast> ltensor,
+    py::array_t<double, py::array::c_style | py::array::forcecast> dm_do,
+    py::array_t<double, py::array::c_style | py::array::forcecast> eta_imode,
+    double tau,
+    double omega,
+    int mdim,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> pdm
+) {
+    auto lt = ltensor.unchecked<3>();
+    auto dm = dm_do.unchecked<2>();
+    auto eta = eta_imode.unchecked<1>();
+
+    int nao = dm.shape(0);
+    int X = lt.shape(0);
+
+    py::array_t<double> vj({nao, nao});
+    py::array_t<double> vk({nao, nao});
+    auto vj_buf = vj.mutable_unchecked<2>();
+    auto vk_buf = vk.mutable_unchecked<2>();
+
+    // precompute base_diff
+    std::vector<double> base_diff(nao * nao);
+    for (int p = 0; p < nao; ++p) {
+        for (int q = 0; q < nao; ++q) {
+            base_diff[p*nao + q] = eta(p) - eta(q);
+        }
+    }
+
+    // pack photon density matrix (real part only)
+    std::vector<double> packed_pdm;
+    if (mdim > 1) {
+        packed_pdm.reserve(mdim * (mdim + 1) / 2);
+        auto pdm_buf = pdm.unchecked<2>();
+        for (int m = 0; m < mdim; ++m) {
+            for (int n = 0; n <= m; ++n) {
+                packed_pdm.push_back(std::real(pdm_buf(m, n)));
+            }
+        }
+    }
+
+    double tmp = tau / omega;
+
+    // main loops with OpenMP parallelization over p,q
+    #pragma omp parallel for collapse(2) schedule(dynamic)
+    for (int p = 0; p < nao; ++p) {
+        for (int q = p; q < nao; ++q) {
+            double shift = eta(p) - eta(q);
+            // compute FC factor matrix for this pair
+            std::vector<double> fc(nao * nao);
+            compute_fc_matrix(nao, base_diff.data(), tmp, mdim,
+                              packed_pdm.empty() ? nullptr : packed_pdm.data(),
+                              shift, fc.data());
+
+            double accJ = 0.0;
+            double accK = 0.0;
+            for (int r = 0; r < nao; ++r) {
+                for (int s = 0; s < nao; ++s) {
+                    double dotJ = 0.0;
+                    double dotK = 0.0;
+                    for (int x = 0; x < X; ++x) {
+                        dotJ += lt(x, p, q) * lt(x, r, s);
+                        dotK += lt(x, p, s) * lt(x, r, q);
+                    }
+                    double w = dm(r, s) * fc[r*nao + s];
+                    accJ += dotJ * w;
+                    accK += dotK * w;
+                }
+            }
+            vj_buf(p, q) = accJ;
+            vj_buf(q, p) = accJ;
+            vk_buf(p, q) = accK;
+            vk_buf(q, p) = accK;
+        }
+    }
+
+    return {vj, vk};
+}
+
+
 //std::pair<py::array_t<double>, py::array_t<double>> displacement_matrix(
 //    const std::vector<int>& nboson_states,
 //    int mode,

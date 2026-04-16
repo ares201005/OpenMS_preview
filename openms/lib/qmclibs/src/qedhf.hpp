@@ -33,6 +33,18 @@ std::pair<py::array_t<double>, py::array_t<double>> displacement_matrix_cpp(
     double shift = 0.0
 );
 
+// optimized Hartree-Fock J/K builder for single photonic mode
+// returns tuple ``(vj, vk)`` with both arrays real-valued
+std::pair<py::array_t<double>, py::array_t<double>> get_JK_cpp(
+    py::array_t<double, py::array::c_style | py::array::forcecast> ltensor,
+    py::array_t<double, py::array::c_style | py::array::forcecast> dm_do,
+    py::array_t<double, py::array::c_style | py::array::forcecast> eta_imode,
+    double tau,
+    double omega,
+    int mdim,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> pdm
+);
+
 
 /*
 
