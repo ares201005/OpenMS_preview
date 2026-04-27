@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.linalg
 from abc import ABC, abstractmethod
+from pyscf import scf, gto
 
 # matrix indices are given by (I, alpha) where I denotes the site, alpha the local state
 # The ordering of matrix indices is given by (0,1), ... , (0, M), (1,0), ..., (1,M), ..., (N,M)
@@ -135,8 +136,11 @@ class FermionGASCF(ABC):
         pass
 
     def _get_tt(self, I, J):
+        shape = (self.M[I], self.M[J])
+        if (I == J):
+            return np.zeros(shape)
         res = self.get_tt(I, J)
-        if (res.shape != (self.M[I], self.M[J])):
+        if (res.shape != shape):
             raise ValueError(f"tt[{I}, {J}] has incorrect shape")
         return res
 
@@ -303,6 +307,14 @@ class FermionGASCF(ABC):
 
         return T, Tsrc
 
+    def _get_A(self, n, R, tarr, corr):
+        arr = []
+        N = self.N
+        for K in range(N):
+            nK = n[K]
+            r = 0.5 * R[K] * (1/(1-nK) - 1/nK)
+            arr.append(sum((r.conj().T @ tarr[I, K].T @ R[I] @ self._get_block(corr, I, K)) for I in range(N)))
+        return arr
     
     def _compute_Hqp(self, L, R):
         r"""
@@ -353,6 +365,22 @@ class FermionGASCF(ABC):
         # construct and solve embedding Hamiltonian
         Hemb = np.kron(Hloc, np.eye(2**M)) + HL + HL.T.conj()
         return Hemb
+    
+    def _get_HK(self, K, n, Lc, R, tarr, corr):
+        N = self.N
+        M = self.M[K]
+        C = self._Cdict[M]
+        nK = n[K]
+        B = np.diag(1/np.sqrt(nK*(1- nK)))
+        
+        # construct derivative Hamiltonian
+        HD = self._compute_Hemb(K, Lc)
+        HDqp = np.zeros((4**M, 4**M), dtype=np.complex128)
+        for I in range(N):
+            M1 = tarr[I, K].T @ R[I] @ self._get_block(corr, I, K) @ B
+            HDqp += sum((M1[alpha, gamma] * np.kron(C[alpha], C[gamma])) for alpha in range(M) for gamma in range(M))
+        HD += HDqp + HDqp.conj().T
+        return HD
     
     def _compute_derivative_energy(self, eigmatrix, DH):
         return sum((eigmatrix[:, i].T.conj() @ DH @ eigmatrix[:, i]) for i in range(self.Ne))
@@ -453,19 +481,7 @@ class FermionGASCF(ABC):
         # get <psi_K| gradients, each of size 4**M
         grad_psiarr = []
         for K in range(N):
-            M = self.M[K]
-            C = self._Cdict[M]
-            nK = n[K]
-            B = np.diag(1/np.sqrt(nK*(1- nK)))
-            
-            # construct derivative Hamiltonian
-            HD = self._compute_Hemb(K, Lc) - Ec[K]*np.eye(4**M)
-            HDqp = np.zeros((4**M, 4**M), dtype=np.complex128)
-            for I in range(N):
-                M1 = tarr[I, K].T @ R[I] @ self._get_block(corr, I, K) @ B
-                HDqp += sum((M1[alpha, gamma] * np.kron(C[alpha], C[gamma])) for alpha in range(M) for gamma in range(M))
-            HD += HDqp + HDqp.conj().T
-
+            HD = self._get_HK(K, n, Lc, R, tarr, corr) - Ec[K]*np.eye(4**self.M[K])
             grad_psiarr.append(HD @ psiarr[K])
 
         # get lambda gradients
@@ -497,10 +513,9 @@ class FermionGASCF(ABC):
 
         # get n gradients
         grad_n = []
+        Aarr = self._get_A(n, R, tarr, corr)
         for K in range(N):
-            nK = n[K]
-            r = 0.5 * R[K] * (1/(1-nK) - 1/nK)
-            M1 = sum((r.conj().T @ tarr[I, K].T @ R[I] @ self._get_block(corr, I, K)) for I in range(N))
+            M1 = Aarr[K]
             M1 -= L[K] + Lc[K]
             grad_n.append(2*np.diag(M1).real)
 
@@ -508,8 +523,8 @@ class FermionGASCF(ABC):
         f = lambda grad: [2*G.conj() for G in grad]
         g = lambda grad: [2*G for G in grad]
         return self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), grad_n, grad_Ec)
-
-    def _get_initial_guess(self):
+    
+    def _get_static_initial_guess(self):
         # initialize all psi to uniformly id on each block (unentangled)
         # L and Lc to 0 and Delta uniform identity on all sites
         # Ec to 0
@@ -534,6 +549,178 @@ class FermionGASCF(ABC):
         
         Ec = np.zeros(N)
         return self._pack_vector(psiarr, L, Lc, narr, Ec)
+
+    class _GHF(scf.ghf.GHF):
+        def __init__(self, gascf, verbose=True):
+            self.gascf = gascf
+
+            vint = 3 if verbose else 0
+            mol = gto.M(verbose=vint)
+            mol.nelectron = gascf.Ne
+            mol.incore_anyway = False
+            mol.nao = 0
+            super().__init__(mol)
+
+            self.conv_tol = 1e-10
+            self.max_cycle = 300
+            self._init_guess = '1e'
+            self.direct_scf = False
+
+            harr = [gascf._get_ht(I) for I in range(gascf.N)]
+            tarr = gascf._get_tarr()
+
+            self._h1e = scipy.linalg.block_diag(*harr) + np.block(tarr.tolist())
+
+        def get_hcore(self, mol=None):
+            return self._h1e
+        
+        def get_ovlp(self, mol=None):
+            return np.eye(self.gascf._Moff[-1])
+        
+        def energy_nuc(self):
+            return 0.0   
+
+        def get_veff(self, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
+            gascf = self.gascf
+            if (dm is None):
+                dm = self.make_rdm1()
+
+            vHF = np.zeros_like(dm)
+            for I in range(self.gascf.N):
+                sl = slice(gascf._Moff[I], gascf._Moff[I+1])
+                CI = dm[sl, sl]
+                U = gascf._get_U(I)
+                vHF[sl, sl] += (
+                    np.einsum('iabj,ab->ij', U, CI)
+                  + np.einsum('aijb,ab->ij', U, CI)
+                  - np.einsum('iajb,ab->ij', U, CI)
+                  - np.einsum('aibj,ab->ij', U, CI) 
+                )
+
+            return vHF
+        
+    
+    def _get_initial_guess(self, verbose=True):
+        # get GHF 1-body correlations in the natural basis
+        mf = self._GHF(self, verbose=verbose)
+        mf.kernel()
+        pcorr = mf.make_rdm1().conj().T
+        Uarr = []
+        narr = []
+        N = self.N
+        for I in range(N):
+            n, U = np.linalg.eigh(self._get_block(pcorr, I, I))
+            Uarr.append(U)
+            narr.append(n)
+        U = scipy.linalg.block_diag(*Uarr)
+        corr = U.conj().T @ pcorr @ U
+        
+        psiarr = []
+        for I in range(N):
+            M = self.M[I]
+            mat = np.zeros((2**M, 2**M), dtype=np.complex128)
+            n = narr[I]
+            for state in range(2**M):
+                p = 1
+                for i in range(M):
+                    if ((state & (1 << i)) == 0):
+                        p *= 1 - n[i]
+                    else:
+                        p *= n[i]
+                mat[state, state] = np.sqrt(p)
+            psiarr.append(get_psi_vector(mat))
+
+        L = [None] * N
+        Lc = [None] * N
+        Ec = np.zeros(N)
+
+        tarr = self._get_tarr()
+        fock = mf.get_hcore() + mf.get_veff()
+        # fock = U.conj().T @ fock @ U
+        L = [self._get_block(fock, I, I) for I in range(N)]
+        for _ in range(50):
+            R = self._compute_renormalizations(psiarr, narr)
+            Aarr = self._get_A(narr, R, tarr, corr)
+            for I in range(N):
+                Lc[I] = np.zeros((self.M[I], self.M[I]), dtype=np.complex128)
+                HK = self._get_HK(I, narr, Lc, R, tarr, corr)
+                eigval, eigvec = np.linalg.eigh(HK)
+                psiarr[I] = eigvec[:, 0]
+                Ec[I] = eigval[0]
+                Lc[I] = Aarr[I] - L[I]
+
+        # ------------------------------------------
+        
+        # tarr = self._get_tarr()
+        # fock = mf.get_hcore() #+ mf.get_veff()
+        # best_norm = np.inf
+        # for j in range(50):
+        #     print(f"Iteration {j}")
+        #     R = self._compute_renormalizations(psiarr, narr)
+        #     Aarr = self._get_A(narr, R, tarr, corr)
+            
+        #     Uarr = [None] * N
+        #     for I in range(N):
+        #         LM = self._get_block(fock, I, I)
+        #         LC = Aarr[I] - LM
+        #         LC = np.zeros((self.M[I], self.M[I]), dtype=np.complex128)
+        #         L[I] = LM
+        #         Lc[I] = LC
+        #         HK = self._get_HK(I, narr, Lc, R, tarr, corr)
+        #         eigval, eigvec = np.linalg.eigh(HK)
+        #         psiarr[I] = eigvec[:, 0]
+        #         Ec[I] = eigval[0]
+        #         Lc[I] = Aarr[I] - LM
+
+        #         M = self.M[I]
+        #         C = self._Cdict[M]
+        #         Delta = np.zeros((M,M), dtype=np.complex128)
+        #         psi = psiarr[I]
+        #         for a in range(M):
+        #             for b in range(M):
+        #                 Delta[a, b] = psi.conj().T @ np.kron(np.eye(2**M), C[b].T @ C[a]) @ psi
+        #         nI, U = np.linalg.eigh(Delta)
+
+        #         L[I] = U.conj().T @ L[I] @ U
+        #         Lc[I] = U.conj().T @ Lc[I] @ U
+        #         narr[I] = nI
+        #         Uarr[I] = U
+        #     U = scipy.linalg.block_diag(*Uarr)
+        #     corr = U.conj().T @ corr @ U
+
+        #     x = self._pack_vector(psiarr, L, Lc, narr, Ec)
+        #     norm = np.linalg.norm(self._compute_gradient(x))
+
+        #     if (norm > best_norm):
+        #         return prev_x
+        #     else:
+        #         best_norm = norm
+        #         prev_x = x
+
+        # -----------------------------------------
+
+        # R = self._compute_renormalizations(psiarr, narr)
+        # tarr = self._get_tarr()
+        # Aarr = self._get_A(narr, R, tarr, corr)
+        # fock = mf.get_hcore() + mf.get_veff()
+
+        # for K in range(N):
+        #     LM = self._get_block(fock, K, K)
+        #     LC = Aarr[K] - LM
+        #     L[K] = LM
+        #     Lc[K] = LC
+        #     HK = self._get_HK(K, narr, Lc, R, tarr, corr)
+        #     psi = psiarr[K]
+        #     Ec[K] = (psi.conj().T @ HK @ psi).real / (np.linalg.norm(psi)**2)
+
+        x = self._pack_vector(psiarr, L, Lc, narr, Ec)
+        if verbose:
+            print(f"EGA={self._compute_lagrangian(x)}, EGHF={mf.e_tot}, (EGA - EGHF)/EGHF = {(self._compute_lagrangian(x) - mf.e_tot)/mf.e_tot}")
+            Hqp = self._compute_Hqp(L, R) 
+            qp_energy, qp_coeff = np.linalg.eigh(Hqp)
+            print(f"|corrGA - corrGHF|/|corrGHF| = {np.linalg.norm(pcorr - self._compute_1body_correlations(qp_coeff, R, psiarr)) / np.linalg.norm(pcorr)}") 
+            print(f"|guessGHF - static| = {np.linalg.norm(x - self._get_static_initial_guess())}")
+        return x
 
     def _compute_1body_correlations(self, qp_coeff, R, psiarr):
         r"""
@@ -575,7 +762,7 @@ class FermionGASCF(ABC):
         self._put_ht()
         self._put_tarr()
         if (x0 is None):
-            x0 = self._get_initial_guess()
+            x0 = self._get_initial_guess(verbose=verbose)
         options = {}
         if maxiter:
             options['maxiter'] = maxiter

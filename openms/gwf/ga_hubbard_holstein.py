@@ -1,9 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from ga_mband_boson import FermiBoseGASCF
+from ga_mband_boson_scf import FermiBoseGASCF
 
 class HubbardHolstein(FermiBoseGASCF):
-    def __init__(self, N=12, filling=0.5, U=2.0, t=-1.0, J=-1.0, g=0.4, omega=0.5, PBC=False):
+    def __init__(self, N=12, filling=0.5, U=2.0, t=-1.0, J=-1.0, g=0.4, omega=0.5, PBC=True):
         if (N <= 0):
             raise ValueError("number of sites must be positive")
         if ((filling <= 0) or (filling >= 1)):
@@ -44,22 +44,22 @@ class HubbardHolstein(FermiBoseGASCF):
         N = self.N
         if self.PBC:
             ms = np.arange(N)
-            ks = 2*np.pi*ms/N
+            qs = 2*np.pi*ms/N
             data = np.zeros(N, dtype=float)
-            for idx, k in enumerate(ks):
-                v = np.exp(1j * k * np.arange(N))
+            for idx, q in enumerate(qs):
+                v = np.exp(1j * q * np.arange(N))
                 data[idx] = (1/N) * (v.conj().T @ A @ v).real
-            return ks, data
+            return qs, data
         else:
             ms = np.arange(1, N+1)
-            ks = np.pi * ms / (N + 1)
+            qs = np.pi * ms / (N + 1)
             data = np.zeros(N, dtype=float)
             sites = np.arange(1, N+1)  # 1..N
-            for idx, k in enumerate(ks):
+            for idx, q in enumerate(qs):
                 # v is real, so $v^\dagger = v^T$
-                v = np.sin(k * sites)
-                data[idx] = (2/(N+1)) * (v @ A @ v).real
-            return ks, data
+                v = np.sin(q * sites)
+                data[idx] = (2/(N+1)) * (v.T @ A @ v).real
+            return qs, data
 
     def _charge_structure_factor(self, res):
         N = self.N
@@ -82,6 +82,17 @@ class HubbardHolstein(FermiBoseGASCF):
       
         return self._compute_structure_factor(A)
     
+    def _plot_structure_factors(self, qS, S, qN, N):
+        plt.figure()
+        plt.title(self.msg)
+        plt.plot(qS/np.pi, S, label="Spin structure factor S(q)")
+        plt.plot(qN/np.pi, N, label="Charge structure factor N(q)")
+        plt.xlabel(r"q/$\pi$")
+        plt.ylabel("Structure Factor")
+        plt.legend()
+        plt.savefig("results/sf_plot.png")
+        plt.show()
+    
     def kernel(self, verbose=True, **kwargs):
         if verbose:
             print("kernel invoked: " + self.msg)
@@ -92,20 +103,13 @@ class HubbardHolstein(FermiBoseGASCF):
         print(f"<N> = {res.get_boson_number(0)}")
         print(f"E = {res.E}")
         
+        print(f"<Sz> = {sum(np.trace(res.get_1body_corr(I, I) @ np.diag([1,-1])) for I in range(self.N))}")
         qS, S = self._spin_structure_factor(res)
         qN, N = self._charge_structure_factor(res)
+        print(f"S(q) maxq/pi={qS[np.argmax(S)]/np.pi}, minq/pi={qS[np.argmin(S)]/np.pi}")
+        print(f"N(q) maxq/pi={qN[np.argmax(N)]/np.pi}, minq/pi={qN[np.argmin(N)]/np.pi}")
 
-        plt.figure()
-        plt.title(self.msg)
-        plt.plot(qS, S, label="Spin structure factor S(q)")
-        plt.plot(qN, N, label="Charge structure factor N(q)")
-        plt.xlabel("q")
-        plt.ylabel("Structure factor")
-        plt.legend()
-        plt.savefig("results/sf_plot.png")
-        plt.show()
-
-        breakpoint()
+        self._plot_structure_factors(qS, S, qN, N)
 
 if __name__ == '__main__':
    gamf = HubbardHolstein()

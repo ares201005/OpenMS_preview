@@ -126,8 +126,11 @@ class FermionGASCF(ABC):
         pass
 
     def _get_tt(self, I, J, *args):
+        shape = (self.M[I], self.M[J])
+        if (I == J):
+            return np.zeros(shape)
         res = self.get_tt(I, J, *args)
-        if (res.shape != (self.M[I], self.M[J])):
+        if (res.shape != shape):
             raise ValueError(f"tt[{I}, {J}] has incorrect shape")
         return res
 
