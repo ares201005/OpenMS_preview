@@ -62,7 +62,7 @@ class FermiBoseGASCF(FermionGASCF):
             # solve fermion problem and check for convergence
             if verbose:
                 print(f"beta = {self._beta}")
-            fermion_res = super().kernel(x0=x0, x=True, verbose=verbose, **kwargs)
+            fermion_res = super().kernel(x0=x0, x=True, verbose=verbose, hf=False, **kwargs)
             E = fermion_res.E
 
             if initialized:

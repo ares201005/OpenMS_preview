@@ -562,7 +562,7 @@ class FermionGASCF(ABC):
             super().__init__(mol)
 
             self.conv_tol = 1e-10
-            self.max_cycle = 300
+            self.max_cycle = 1000
             self._init_guess = '1e'
             self.direct_scf = False
 
@@ -600,7 +600,7 @@ class FermionGASCF(ABC):
             return vHF
         
     
-    def _get_initial_guess(self, verbose=True):
+    def _get_initial_guess(self, verbose=True, hf=True):
         # get GHF 1-body correlations in the natural basis
         mf = self._GHF(self, verbose=verbose)
         mf.kernel()
@@ -720,7 +720,10 @@ class FermionGASCF(ABC):
             qp_energy, qp_coeff = np.linalg.eigh(Hqp)
             print(f"|corrGA - corrGHF|/|corrGHF| = {np.linalg.norm(pcorr - self._compute_1body_correlations(qp_coeff, R, psiarr)) / np.linalg.norm(pcorr)}") 
             print(f"|guessGHF - static| = {np.linalg.norm(x - self._get_static_initial_guess())}")
-        return x
+
+        if hf:
+            return x, {"converged":mf.converged, "e_tot":mf.e_tot}
+        return x, None
 
     def _compute_1body_correlations(self, qp_coeff, R, psiarr):
         r"""
@@ -745,7 +748,7 @@ class FermionGASCF(ABC):
 
         return expcorr
 
-    def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, x=False, verbose=True):
+    def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, hf=True, x=False, verbose=True):
         r"""
         Use root finding (via scipy.optimize.root) on the gradient to calculate the ground state via Newton's method
 
@@ -762,7 +765,13 @@ class FermionGASCF(ABC):
         self._put_ht()
         self._put_tarr()
         if (x0 is None):
-            x0 = self._get_initial_guess(verbose=verbose)
+            x0, hfres = self._get_initial_guess(verbose=verbose, hf=hf)
+        elif hf:
+            mf = self._GHF(self, verbose=verbose)
+            mf.kernel()
+            hfres = {"converged":mf.converged, "e_tot":mf.e_tot}
+        else:
+            hfres = None
         options = {}
         if maxiter:
             options['maxiter'] = maxiter
@@ -785,10 +794,10 @@ class FermionGASCF(ABC):
         self._put_ht()
         self._put_tarr()
 
-        return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec, T=T, Tsrc=Tsrc, result=result, corr=expcorr)
+        return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec, T=T, Tsrc=Tsrc, result=result, corr=expcorr, hfres=hfres)
     
 class FermionGASCFResult:
-    def __init__(self, Moff, Ne, E, psiarr, L, Lc, n, Ec, T=None, Tsrc=None, result=None, corr=None):
+    def __init__(self, Moff, Ne, E, psiarr, L, Lc, n, Ec, T=None, Tsrc=None, result=None, corr=None, hfres=None):
         N = len(Moff) - 1
         self.N = N
         self.Ne = Ne
@@ -809,6 +818,9 @@ class FermionGASCFResult:
             for I in range(N):
                 TD.append(np.einsum('abcc,c->ab', T[I], n[I]))
             self._TD = TD
+
+        if (hfres is not None):
+            self.hf = hfres
 
         projectors = []
         for I in range(N):

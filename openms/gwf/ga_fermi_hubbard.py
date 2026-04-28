@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from ga_mband import FermionGASCF
 
 class FermiHubbard(FermionGASCF):
-    def __init__(self, N=12, filling=0.5, U=2.0, t=-1.0, J=+8.0, PBC=True):
+    def __init__(self, N=12, filling=0.5, U=2.0, t=-1.0, J=+1.0, PBC=True):
         if (N <= 0):
             raise ValueError("number of sites must be positive")
         if ((filling <= 0) or (filling >= 1)):
@@ -92,33 +92,37 @@ class FermiHubbard(FermionGASCF):
         if verbose:
             print("kernel invoked: " + self.msg)
         res = super().kernel(verbose=verbose, **kwargs)
-        print(f"self.Ne = {self.Ne}")
-        print(f"Delta computed Ne = {sum(np.trace(res.Delta(I)) for I in range(self.N))}")
-        print(f"correlation computed Ne = {sum(np.trace(res.get_1body_corr(I, I)) for I in range(self.N))}")
-        print(f"E = {res.E}")
-        
-        print(f"<Sz> = {sum(np.trace(res.get_1body_corr(I, I) @ np.diag([1,-1])) for I in range(self.N))}")
-        qS, S = self._spin_structure_factor(res)
-        qN, N = self._charge_structure_factor(res)
-        print(f"S(q) maxq/pi={qS[np.argmax(S)]/np.pi}, minq/pi={qS[np.argmin(S)]/np.pi}")
-        print(f"N(q) maxq/pi={qN[np.argmax(N)]/np.pi}, minq/pi={qN[np.argmin(N)]/np.pi}")
-
+        if verbose:
+            print(f"self.Ne = {self.Ne}")
+            print(f"Delta computed Ne = {sum(np.trace(res.Delta(I)) for I in range(self.N))}")
+            print(f"correlation computed Ne = {sum(np.trace(res.get_1body_corr(I, I)) for I in range(self.N))}")
+            print(f"E = {res.E}")
+        return res
+    
+    def do_kernel(self, verbose=True, **kwargs):
+        res = self.kernel(verbose=verbose, **kwargs)
+        if verbose:
+            print(f"<Sz> = {sum(np.trace(res.get_1body_corr(I, I) @ np.diag([1,-1])) for I in range(self.N))}")
+            qS, S = self._spin_structure_factor(res)
+            qN, N = self._charge_structure_factor(res)
+            print(f"S(q) maxq/pi={qS[np.argmax(S)]/np.pi}, minq/pi={qS[np.argmin(S)]/np.pi}")
+            print(f"N(q) maxq/pi={qN[np.argmax(N)]/np.pi}, minq/pi={qN[np.argmin(N)]/np.pi}")
         self._plot_structure_factors(qS, S, qN, N)
 
 if __name__ == '__main__':
     if (len(argv) <= 3):
         gamf = FermiHubbard()
         if (len(argv) == 1):
-            gamf.kernel()
+            gamf.do_kernel()
         elif (len(argv) == 2):
-            gamf.kernel(method=argv[1])
+            gamf.do_kernel(method=argv[1])
         elif (len(argv) == 3):
-            gamf.kernel(method=argv[1], tolerance=float(argv[2]))
+            gamf.do_kernel(method=argv[1], tolerance=float(argv[2]))
     elif (len(argv) <= 5):
         gamf = FermiHubbard(N=int(argv[3]))
         if (len(argv) == 4):
-            gamf.kernel(method=argv[1], tolerance=float(argv[2]))
+            gamf.do_kernel(method=argv[1], tolerance=float(argv[2]))
         elif (len(argv) == 5):
-            gamf.kernel(method=argv[1], tolerance=float(argv[2]), maxiter=int(argv[4]))
+            gamf.do_kernel(method=argv[1], tolerance=float(argv[2]), maxiter=int(argv[4]))
     else:
         print(f"Usage: {argv[0]} [method] [tolerance] [nsites] [maxiter]")  
