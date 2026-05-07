@@ -244,6 +244,9 @@ class FermionGASCF(ABC):
         assert idx == len(x), "Unpack error: leftover elements in input array"
         return psiarr, L, Lc, n, Ec
     
+    def _get_block(self, mat, I, J):
+        return _get_block(mat, self._Moff, I, J)
+    
     def _get_static_initial_guess(self):
         # initialize all psi to uniformly id on each block (unentangled)
         # L and Lc to 0 and Delta uniform identity on all sites
@@ -270,10 +273,137 @@ class FermionGASCF(ABC):
         Ec = np.zeros(N)
         return self._pack_vector(psiarr, L, Lc, narr, Ec)
     
+    class _GHF(scf.ghf.GHF):
+        def __init__(self, gascf, verbose=True):
+            self.gascf = gascf
+
+            vint = 3 if verbose else 0
+            mol = gto.M(verbose=vint)
+            mol.nelectron = gascf.Ne
+            mol.incore_anyway = False
+            mol.nao = 0
+            super().__init__(mol)
+
+            self.conv_tol = 1e-10
+            self.max_cycle = 1000
+            self._init_guess = '1e'
+            self.direct_scf = False
+
+            self._h1e = scipy.linalg.block_diag(*gascf._harr) + gascf._tblock
+
+        def get_hcore(self, mol=None):
+            return self._h1e
+        
+        def get_ovlp(self, mol=None):
+            return np.eye(self.gascf._Moff[-1])
+        
+        def energy_nuc(self):
+            return 0.0   
+
+        def get_veff(self, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
+            gascf = self.gascf
+            if (dm is None):
+                dm = self.make_rdm1()
+
+            vHF = np.zeros_like(dm)
+            for I in range(self.gascf.N):
+                sl = slice(gascf._Moff[I], gascf._Moff[I+1])
+                CI = dm[sl, sl]
+                U = gascf._Uarr[I]
+                vHF[sl, sl] += (
+                    np.einsum('iabj,ab->ij', U, CI)
+                  + np.einsum('aijb,ab->ij', U, CI)
+                  - np.einsum('iajb,ab->ij', U, CI)
+                  - np.einsum('aibj,ab->ij', U, CI) 
+                )
+
+            return vHF
+    
     def _get_initial_guess(self, verbose=True, hf=True):
-        return self._get_static_initial_guess(), None
+        # get GHF 1-body correlations in the natural basis
+        mf = self._GHF(self, verbose=verbose)
+        mf.kernel()
+        pcorr = mf.make_rdm1().conj().T
+        Uarr = []
+        narr = []
+        N = self.N
+        for I in range(N):
+            n, U = np.linalg.eigh(self._get_block(pcorr, I, I))
+            Uarr.append(U)
+            narr.append(n)
+        U = scipy.linalg.block_diag(*Uarr)
+        corr = U.conj().T @ pcorr @ U
+        
+        psiarr = []
+        for I in range(N):
+            M = self.M[I]
+            mat = np.zeros((2**M, 2**M), dtype=np.complex128)
+            n = narr[I]
+            for state in range(2**M):
+                p = 1
+                for i in range(M):
+                    if ((state & (1 << i)) == 0):
+                        p *= 1 - n[i]
+                    else:
+                        p *= n[i]
+                mat[state, state] = np.sqrt(p)
+            psiarr.append(get_psi_vector(mat))
+
+        fock = mf.get_hcore() + mf.get_veff()
+        fock = U.conj().T @ fock @ U
+        L = [0.5*self._get_block(fock, I, I) for I in range(N)]
+
+        Lc = [None] * N
+        Ec = np.zeros(N)
+        # R = self._compute_renormalizations(psiarr, narr)
+        # Aarr = self._get_A(narr, R, self._tblock, corr)
+        # for I in range(N):
+        #     Lc[I] = np.zeros((self.M[I], self.M[I]), dtype=np.complex128)
+        #     HK = self._get_HK(I, narr, Lc, R, self._tblock, corr)
+        #     eigval, eigvec = np.linalg.eigh(HK)
+        #     psiarr[I] = eigvec[:, 0]
+        #     Ec[I] = eigval[0]
+        #     Lc[I] = Aarr[I] - L[I]
+        
+        x = self._get_static_initial_guess()
+        if hf:
+            return x, {"converged":mf.converged, "e_tot":mf.e_tot}
+        return x, None
     
     def _compute_gradient(self, x):
+        r"""
+        Compute the first derivatives
+
+        .. math::
+
+            \dfrac{\partial \mathcal{L}_e}{\partial E_c^K} &= 1 - \braket{\Psi_K} \\
+            \dfrac{\partial \mathcal{L}_e}{\partial \lambda^K_{ab}} &= \bra{\Psi_0^e} c_{Ka}^\dagger c_{Kb} \ket{\Psi_0^e} - \Delta^K_{ab} \\
+            \dfrac{\partial \mathcal{L}_e}{\partial (\lambda^K_c)_{ab}} &= \bra{\Psi_K} f_b^\dagger f_a \ket{\Psi_K} - \Delta^K_{ab} \\
+            \dfrac{\partial{\mathcal{L}_e}}{\partial n^K_z} &= 2 \text{Re} \mathcal{A}^K_{zz} \\
+            \dfrac{\partial \mathcal{L}_e}{\partial \bra{\Psi_K}} &= \hat{H}^K \ket{\Psi_K}
+
+        where
+
+        .. math::
+
+            \mathcal{A}^K_{yz} &= -(\lambda^K + \lambda^K_c)_{yz} \\
+            &+ \sum_I \left[ r^{K\dagger} \tilde{t}^{IK}\mathcal{R}^I\Delta^{IK} \right]_{yz} \\
+            r^K_{\alpha a} \equiv \dfrac{\partial \mathcal{R}^K_{\alpha a}}{\partial n^K_a} &= \dfrac{1}{2} \left[ \dfrac{1}{1- n^K_a} - \dfrac{1}{n^K_a} \right] \mathcal{R}^K_{\alpha a}
+
+        and the Hermitian operator
+
+        .. math::
+
+            \hat{H}^K &= \hat{H}^K_{emb} - E_c^K \mathbb{I} \\
+            &+ \sum_{\alpha\gamma} \left[ \left[\sum_I \tilde{t}^{{IK}^T} \mathcal{R}^I \Delta^{IK}  {B^K} \right]_{\alpha\gamma} c_\alpha f_\gamma\right] + h.c. \\
+            
+       Here, :math:`B^K` is a diagonal matrix with 
+
+        .. math::
+
+            (B^K)_{ab} = \dfrac{\delta_{ab}}{\sqrt{n^K_a(1-n^K_a)}}
+
+        """
         psiarr, L, Lc, n, Ec = self._unpack_vector(x)
         grad_psiarr, grad_L, grad_Lc, grad_n, grad_Ec = self._gacpp._compute_gradient(psiarr, L, Lc, n, Ec, self._harr, self._tblock, self._Uarr)
         f = lambda grad: [2*G.conj() for G in grad]

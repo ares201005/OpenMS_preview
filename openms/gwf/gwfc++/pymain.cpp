@@ -5,8 +5,6 @@
 
 #include "gafermion.hpp"
 
-#include <iostream>
-
 namespace py = pybind11;
 
 int FermionGACPP::get_N() {
