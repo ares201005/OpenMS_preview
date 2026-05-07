@@ -204,3 +204,4 @@ if __name__ == '__main__':
             gamf.do_kernel(method=argv[1], tolerance=float(argv[2]), maxiter=int(argv[4]))
     else:
         print(f"Usage: {argv[0]} [method] [tolerance] [nsites] [maxiter]")
+
