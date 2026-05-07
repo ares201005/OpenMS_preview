@@ -674,7 +674,7 @@ class FermionGASCF(ABC):
         tarr = self._get_tarr()
         fock = mf.get_hcore() + mf.get_veff()
         fock = U.conj().T @ fock @ U
-        L = [self._get_block(fock, I, I) for I in range(N)]
+        L = [0.5*self._get_block(fock, I, I) for I in range(N)]
         for _ in range(50):
             prev_psiarr = [psi.copy() for psi in psiarr]
             R = self._compute_renormalizations(psiarr, narr)
