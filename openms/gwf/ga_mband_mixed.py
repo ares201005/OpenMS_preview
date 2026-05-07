@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.linalg
+import scipy.optimize
 from abc import ABC, abstractmethod
 from pyscf import scf, gto
 
@@ -222,6 +223,19 @@ class FermionGASCF(ABC):
 
         assert idx == len(x), "Unpack error: leftover elements in input array"
         return psiarr, L, Lc, n, Ec 
+
+    def _get_n_slice(self):
+        idx = 0
+        for M in self.M:
+            idx += 2 * (4**M)
+        for M in self.M:
+            idx += 2 * (M*M)
+        for M in self.M:
+            idx += 2 * (M*M)
+        n_start = idx
+        for M in self.M:
+            idx += M
+        return slice(n_start, idx)
     
     def _get_tarr(self):
         if (self._tarr is not None):
@@ -236,6 +250,29 @@ class FermionGASCF(ABC):
     
     def _put_tarr(self):
         self._tarr = None
+
+    def _get_qp_occupations(self, qp_energy, degeneracy_tol=1e-10):
+        occ = np.zeros(len(qp_energy), dtype=float)
+        if self.Ne <= 0:
+            return occ
+        if self.Ne >= len(qp_energy):
+            occ[:] = 1.0
+            return occ
+
+        fermi = qp_energy[self.Ne - 1]
+        tol = degeneracy_tol * max(1.0, abs(fermi))
+        below = qp_energy < fermi - tol
+        shell = np.abs(qp_energy - fermi) <= tol
+
+        occ[below] = 1.0
+        remaining = self.Ne - np.count_nonzero(below)
+        if remaining > 0:
+            occ[shell] = remaining / np.count_nonzero(shell)
+        return occ
+
+    def _compute_qp_density(self, qp_coeff, qp_energy):
+        occ = self._get_qp_occupations(qp_energy)
+        return (qp_coeff * occ).conj() @ qp_coeff.T
 
     def _compute_renormalizations(self, psiarr, n):
         r"""
@@ -262,7 +299,7 @@ class FermionGASCF(ABC):
             R.append(opmat * (1/np.sqrt(nI*(1-nI))))
 
         return R
-    
+
     def _compute_density_renormalizations(self, psiarr, n):
         r"""
         Compute all 2-body (number-preserving) renormalization factors, given by
@@ -281,7 +318,7 @@ class FermionGASCF(ABC):
                 for b in range(M):
                     X[a, b] = C[a].T @ C[b]
             Xdict[M] = X
-        
+
         T = []
         Tsrc = []
         for I in range(self.N):
@@ -297,7 +334,7 @@ class FermionGASCF(ABC):
                     for a in range(M):
                         for b in range(M):
                             G[alpha, beta, a, b] = psi.conj().T @ np.kron(M1, X[a, b]) @ psi
-                            
+
             nI = n[I]
             b = 1/np.sqrt(nI*(1-nI))
             bb = np.outer(b, b)
@@ -315,7 +352,7 @@ class FermionGASCF(ABC):
             r = 0.5 * R[K] * (1/(1-nK) - 1/nK)
             arr.append(sum((r.conj().T @ tarr[I, K].T @ R[I] @ self._get_block(corr, I, K)) for I in range(N)))
         return arr
-    
+
     def _compute_Hqp(self, L, R):
         r"""
         Compute
@@ -331,7 +368,7 @@ class FermionGASCF(ABC):
         tarr = self._get_tarr()
         t = np.block(tarr.tolist())
         Rblock = scipy.linalg.block_diag(*R)
-        
+
         Hqp = Rblock.T @ t @ Rblock.conj()
 
         LH = []
@@ -340,7 +377,7 @@ class FermionGASCF(ABC):
         Hqp += scipy.linalg.block_diag(*LH)
 
         return Hqp
-    
+
     def _compute_Hemb(self, I, Lc):
         r"""
         Compute
@@ -382,8 +419,8 @@ class FermionGASCF(ABC):
         HD += HDqp + HDqp.conj().T
         return HD
     
-    def _compute_derivative_energy(self, eigmatrix, DH):
-        return sum((eigmatrix[:, i].T.conj() @ DH @ eigmatrix[:, i]) for i in range(self.Ne))
+    def _compute_derivative_energy(self, eigmatrix, DH, occ):
+        return sum(occ[i] * (eigmatrix[:, i].T.conj() @ DH @ eigmatrix[:, i]) for i in np.flatnonzero(occ))
 
     def _compute_lagrangian(self, x):
         r"""
@@ -407,12 +444,13 @@ class FermionGASCF(ABC):
         N = self.N
         psiarr, L, Lc, n, Ec = self._unpack_vector(x)
         Lag = 0
-        
+
         # calculate Hqp and energies of filled eigenstates
         R = self._compute_renormalizations(psiarr, n)
         Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
-        Lag += sum(qp_energy[i] for i in range(self.Ne))
+        qp_occ = self._get_qp_occupations(qp_energy)
+        Lag += np.dot(qp_occ, qp_energy)
 
         # get embedding Hamiltonian expectations and normalization terms
         for I in range(N):
@@ -454,8 +492,8 @@ class FermionGASCF(ABC):
 
             \hat{H}^K &= \hat{H}^K_{emb} - E_c^K \mathbb{I} \\
             &+ \sum_{\alpha\gamma} \left[ \left[\sum_I \tilde{t}^{{IK}^T} \mathcal{R}^I \Delta^{IK}  {B^K} \right]_{\alpha\gamma} c_\alpha f_\gamma\right] + h.c. \\
-            
-       Here, :math:`B^K` is a diagonal matrix with 
+
+       Here, :math:`B^K` is a diagonal matrix with
 
         .. math::
 
@@ -473,10 +511,10 @@ class FermionGASCF(ABC):
         R = self._compute_renormalizations(psiarr, n)
         Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
+        qp_occ = self._get_qp_occupations(qp_energy)
 
         # compute single particle correlations
-        occ = [(i < self.Ne) for i in range(self._Moff[-1])]
-        corr = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
+        corr = self._compute_qp_density(qp_coeff, qp_energy)
 
         # get <psi_K| gradients, each of size 4**M
         grad_psiarr = []
@@ -493,7 +531,7 @@ class FermionGASCF(ABC):
                 for b in range(M):
                     DH = np.zeros(Hqp.shape)
                     DH[self._Moff[I] + a, self._Moff[I] + b] = 1
-                    Lm[a, b] = self._compute_derivative_energy(qp_coeff, DH)
+                    Lm[a, b] = self._compute_derivative_energy(qp_coeff, DH, qp_occ)
             idx = np.arange(M)
             Lm[idx, idx] -= n[I]
             grad_L.append(Lm)
@@ -523,7 +561,7 @@ class FermionGASCF(ABC):
         f = lambda grad: [2*G.conj() for G in grad]
         g = lambda grad: [2*G for G in grad]
         return self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), grad_n, grad_Ec)
-    
+
     def _get_static_initial_guess(self):
         # initialize all psi to uniformly id on each block (unentangled)
         # L and Lc to 0 and Delta uniform identity on all sites
@@ -541,12 +579,12 @@ class FermionGASCF(ABC):
             L.append(ZM.copy())
             Lc.append(ZM.copy())
 
-            # get projector and normalized phi matrix for the evenly filled state   
+            # get projector and normalized phi matrix for the evenly filled state
             narr.append(M*[self.filling])
             psivec = get_psi_vector(np.eye(2**M))
             psivec = psivec / np.linalg.norm(psivec)
             psiarr.append(psivec)
-        
+
         Ec = np.zeros(N)
         return self._pack_vector(psiarr, L, Lc, narr, Ec)
 
@@ -573,12 +611,12 @@ class FermionGASCF(ABC):
 
         def get_hcore(self, mol=None):
             return self._h1e
-        
+
         def get_ovlp(self, mol=None):
             return np.eye(self.gascf._Moff[-1])
-        
+
         def energy_nuc(self):
-            return 0.0   
+            return 0.0
 
         def get_veff(self, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
             gascf = self.gascf
@@ -594,17 +632,16 @@ class FermionGASCF(ABC):
                     np.einsum('iabj,ab->ij', U, CI)
                   + np.einsum('aijb,ab->ij', U, CI)
                   - np.einsum('iajb,ab->ij', U, CI)
-                  - np.einsum('aibj,ab->ij', U, CI) 
+                  - np.einsum('aibj,ab->ij', U, CI)
                 )
 
             return vHF
-        
-    
+
     def _get_initial_guess(self, verbose=True, hf=True):
         # get GHF 1-body correlations in the natural basis
         mf = self._GHF(self, verbose=verbose)
         mf.kernel()
-        pcorr = mf.make_rdm1().conj().T
+        pcorr = self._compute_qp_density(mf.mo_coeff, mf.mo_energy)
         Uarr = []
         narr = []
         N = self.N
@@ -614,7 +651,7 @@ class FermionGASCF(ABC):
             narr.append(n)
         U = scipy.linalg.block_diag(*Uarr)
         corr = U.conj().T @ pcorr @ U
-        
+
         psiarr = []
         for I in range(N):
             M = self.M[I]
@@ -648,9 +685,10 @@ class FermionGASCF(ABC):
                 psiarr[I] = eigvec[:, 0]
                 Ec[I] = eigval[0]
                 Lc[I] = Aarr[I] - L[I]
+            break
 
         # ------------------------------------------
-        
+
         # tarr = self._get_tarr()
         # fock = mf.get_hcore() #+ mf.get_veff()
         # best_norm = np.inf
@@ -658,7 +696,7 @@ class FermionGASCF(ABC):
         #     print(f"Iteration {j}")
         #     R = self._compute_renormalizations(psiarr, narr)
         #     Aarr = self._get_A(narr, R, tarr, corr)
-            
+
         #     Uarr = [None] * N
         #     for I in range(N):
         #         LM = self._get_block(fock, I, I)
@@ -718,14 +756,14 @@ class FermionGASCF(ABC):
             print(f"EGA={self._compute_lagrangian(x)}, EGHF={mf.e_tot}, (EGA - EGHF)/EGHF = {(self._compute_lagrangian(x) - mf.e_tot)/mf.e_tot}")
             Hqp = self._compute_Hqp(L, R) 
             qp_energy, qp_coeff = np.linalg.eigh(Hqp)
-            print(f"|corrGA - corrGHF|/|corrGHF| = {np.linalg.norm(pcorr - self._compute_1body_correlations(qp_coeff, R, psiarr)) / np.linalg.norm(pcorr)}") 
+            print(f"|corrGA - corrGHF|/|corrGHF| = {np.linalg.norm(pcorr - self._compute_1body_correlations(qp_coeff, R, psiarr, qp_energy)) / np.linalg.norm(pcorr)}") 
             print(f"|guessGHF - static| = {np.linalg.norm(x - self._get_static_initial_guess())}")
 
         if hf:
             return x, {"converged":mf.converged, "e_tot":mf.e_tot}
         return x, None
 
-    def _compute_1body_correlations(self, qp_coeff, R, psiarr):
+    def _compute_1body_correlations(self, qp_coeff, R, psiarr, qp_energy):
         r"""
         Compute physical 1-body correlations under :math:`\ket{\Psi_G}` using:
 
@@ -734,8 +772,7 @@ class FermionGASCF(ABC):
 
         :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} \ket{\Psi_G} = \text{Tr} \left[ \phi_I^\dagger c^\dagger_a c_b \phi_I  \right]` for each :math:`I`.
         """
-        occ = [(i < self.Ne) for i in range(self._Moff[-1])]
-        corr = qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
+        corr = self._compute_qp_density(qp_coeff, qp_energy)
         Rblock = scipy.linalg.block_diag(*R)
         expcorr = Rblock @ corr @ Rblock.T.conj()
         for I in range(self.N):
@@ -748,7 +785,17 @@ class FermionGASCF(ABC):
 
         return expcorr
 
-    def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, hf=True, x=False, verbose=True):
+    def kernel(
+        self,
+        method="krylov",
+        maxiter=None,
+        x0=None,
+        tolerance=1e-4,
+        hf=True,
+        x=False,
+        verbose=True,
+        n_bounds=(1e-8, 1 - 1e-8),
+    ):
         r"""
         Use root finding (via scipy.optimize.root) on the gradient to calculate the ground state via Newton's method
 
@@ -758,6 +805,7 @@ class FermionGASCF(ABC):
         :param tolerance: maximum acceptable gradient norm.  Default value is 1e-4.
         :param x: boolean specifying whether to included the packed vector in the result.  Default value is False.
         :param verbose: show verbose output regarding the Newton solver.  Default value is True.
+        :param n_bounds: lower and upper bounds for occupation variables when using ``method="least_squares"``.
 
         The kernel returns a ``FermionGASCFResult`` object that can be queried for success status and values of Lagrange multipliers, Gutzwiller parameters and projectors, and correlation functions.
         """
@@ -777,8 +825,45 @@ class FermionGASCF(ABC):
             options['maxiter'] = maxiter
         if verbose:
             options['disp'] = True
-        options['fatol'] = tolerance
-        result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
+        if method == "least_squares":
+            nlo, nhi = n_bounds
+            bounds_lo = np.full_like(x0, -np.inf, dtype=float)
+            bounds_hi = np.full_like(x0, np.inf, dtype=float)
+            n_slice = self._get_n_slice()
+            bounds_lo[n_slice] = nlo
+            bounds_hi[n_slice] = nhi
+            x0 = np.array(x0, copy=True)
+            x0[n_slice] = np.clip(x0[n_slice], nlo, nhi)
+
+            def residual(z):
+                try:
+                    f = self._compute_gradient(z)
+                except (np.linalg.LinAlgError, FloatingPointError, ValueError):
+                    return np.full_like(x0, 1e12, dtype=float)
+                if not np.all(np.isfinite(f)):
+                    return np.full_like(x0, 1e12, dtype=float)
+                return f
+
+            result = scipy.optimize.least_squares(
+                residual,
+                x0,
+                bounds=(bounds_lo, bounds_hi),
+                xtol=tolerance,
+                ftol=tolerance,
+                gtol=tolerance,
+                max_nfev=maxiter,
+                verbose=2 if verbose else 0,
+            )
+            result.fun_norm = np.linalg.norm(result.fun)
+            if result.fun_norm <= tolerance:
+                result.success = True
+                result.message = f"{result.message} Residual norm {result.fun_norm:.6e} <= tolerance."
+            else:
+                result.success = False
+                result.message = f"{result.message} Residual norm {result.fun_norm:.6e} > tolerance."
+        else:
+            options['fatol'] = tolerance
+            result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
 
         # parse result
         psiarr, L, Lc, n, Ec = self._unpack_vector(result.x)
@@ -788,14 +873,14 @@ class FermionGASCF(ABC):
         E = self._compute_lagrangian(result.x)
         if (not x):
             result.pop("x")
-        expcorr = self._compute_1body_correlations(qp_coeff, R, psiarr)
+        expcorr = self._compute_1body_correlations(qp_coeff, R, psiarr, qp_energy)
         T, Tsrc = self._compute_density_renormalizations(psiarr, n)
 
         self._put_ht()
         self._put_tarr()
 
         return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec, T=T, Tsrc=Tsrc, result=result, corr=expcorr, hfres=hfres)
-    
+
 class FermionGASCFResult:
     def __init__(self, Moff, Ne, E, psiarr, L, Lc, n, Ec, T=None, Tsrc=None, result=None, corr=None, hfres=None):
         N = len(Moff) - 1
@@ -840,7 +925,7 @@ class FermionGASCFResult:
         if (self.corr is None):
             return None
         return _get_block(self.corr, self._Moff, I, J)
-    
+
     def get_density_corr(self, I, J):
         r"""
         Return the tensor :math:`M_{abcd} = \bra{\Psi_G} c^\dagger_{Ia} c_{Ib} c^\dagger_{Jc} c_{Jd} \ket{\Psi_G}`.
@@ -874,7 +959,7 @@ class FermionGASCFResult:
             corr2 += np.einsum('ab,cd->abcd', self._Tsrc[I], self._TD[J])
 
         return corr2
-    
+
     def get_number_corr(self, I, J):
         r"""
         Return the matrix :math:`M_{ab} = \bra{\Psi_G} n_{Ia} n_{Jb} \ket{\Psi_G}` where :math:`n_{Ia} \equiv c^\dagger_{Ia} c_{Ia}`.
