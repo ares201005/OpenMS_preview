@@ -673,19 +673,21 @@ class FermionGASCF(ABC):
 
         tarr = self._get_tarr()
         fock = mf.get_hcore() + mf.get_veff()
-        # fock = U.conj().T @ fock @ U
+        fock = U.conj().T @ fock @ U
         L = [self._get_block(fock, I, I) for I in range(N)]
         for _ in range(50):
+            prev_psiarr = [psi.copy() for psi in psiarr]
             R = self._compute_renormalizations(psiarr, narr)
             Aarr = self._get_A(narr, R, tarr, corr)
             for I in range(N):
-                Lc[I] = np.zeros((self.M[I], self.M[I]), dtype=np.complex128)
+                Lc[I] = Aarr[I] - L[I]
+            for I in range(N):
                 HK = self._get_HK(I, narr, Lc, R, tarr, corr)
                 eigval, eigvec = np.linalg.eigh(HK)
                 psiarr[I] = eigvec[:, 0]
                 Ec[I] = eigval[0]
-                Lc[I] = Aarr[I] - L[I]
-            break
+            if np.linalg.norm(np.concatenate(psiarr) - np.concatenate(prev_psiarr)) < 1e-10:
+                break
 
         # ------------------------------------------
 
