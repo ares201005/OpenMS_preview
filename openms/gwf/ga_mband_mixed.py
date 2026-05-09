@@ -29,6 +29,11 @@ def get_psi_vector(psi):
             vec[Gamma*a + n] = psi[Gamma, n]
     return vec
 
+def _get_matrix_ip(psi, A):
+    M, _ = A.shape
+    psic = psi.conj().T
+    return sum(np.dot(psic[a,:], A[:,a]) for a in range(M))
+
 def _get_annahilation_operators(M):
     C = np.zeros((M, 2**M, 2**M))
     for i in range(M):
@@ -88,8 +93,9 @@ class FermionGASCF(ABC):
         for M in set(self.M):
             self._Cdict[M] = _get_annahilation_operators(M)
 
-        self._put_ht()
-        self._put_tarr()
+        self._put_harr()
+        self._put_tblock()
+        self._put_Uarr()
 
     @abstractmethod
     def get_ht(self, I):
@@ -100,8 +106,6 @@ class FermionGASCF(ABC):
         pass
 
     def _get_ht(self, I):
-        if (self._harr[I] is not None):
-            return self._harr[I]
         M = self.M[I]
         res = self.get_ht(I)
         if (res.shape != (M, M)):
@@ -109,7 +113,12 @@ class FermionGASCF(ABC):
         self._harr[I] = res
         return res
     
-    def _put_ht(self):
+    def _get_harr(self):
+        if (self._harr == [None]*self.N):
+            for I in range(self.N):
+                self._harr[I] = self._get_ht(I)
+    
+    def _put_harr(self):
         self._harr = [None] * self.N
     
     @abstractmethod
@@ -126,6 +135,14 @@ class FermionGASCF(ABC):
         if (res.shape != (M, M, M, M)):
             raise ValueError(f"U[{I}] has incorrect shape")
         return res
+    
+    def _get_Uarr(self):
+        if (self._Uarr == [None]*self.N):
+            for I in range(self.N):
+                self._Uarr[I] = self._get_U(I)
+
+    def _put_Uarr(self):
+        self._Uarr = [None]*self.N
     
     @abstractmethod
     def get_tt(self, I, J):
@@ -144,6 +161,18 @@ class FermionGASCF(ABC):
         if (res.shape != shape):
             raise ValueError(f"tt[{I}, {J}] has incorrect shape")
         return res
+    
+    def _get_tblock(self):
+        if (self._tblock is None):
+            N = self.N
+            tarr = np.zeros((N, N), dtype=object)
+            for I in range(N):
+                for J in range(N):
+                    tarr[I, J] = self._get_tt(I, J)
+            self._tblock = np.block(tarr.tolist())
+    
+    def _put_tblock(self):
+        self._tblock = None
 
     def _get_block(self, Mat, I, J):
         return _get_block(Mat, self._Moff, I, J)           
@@ -183,14 +212,13 @@ class FermionGASCF(ABC):
     def _unpack_vector(self, x):
         idx = 0
         N = self.N
-
         psiarr = []
         for I in range(N):
-            size_psi = 4**self.M[I]
-            Re = x[idx:(idx + size_psi)].reshape(size_psi)
-            idx += size_psi
-            Im = x[idx:(idx + size_psi)].reshape(size_psi)
-            idx += size_psi
+            size_psi = 2**self.M[I]
+            Re = x[idx:(idx + size_psi**2)].reshape(size_psi, size_psi)
+            idx += size_psi**2
+            Im = x[idx:(idx + size_psi**2)].reshape(size_psi, size_psi)
+            idx += size_psi**2
             psiarr.append(Re + 1j*Im)
 
         L = []
@@ -236,20 +264,6 @@ class FermionGASCF(ABC):
         for M in self.M:
             idx += M
         return slice(n_start, idx)
-    
-    def _get_tarr(self):
-        if (self._tarr is not None):
-            return self._tarr
-        N = self.N
-        tarr = np.zeros((N, N), dtype=object)
-        for I in range(N):
-            for J in range(N):
-                tarr[I, J] = self._get_tt(I, J)
-        self._tarr = tarr
-        return tarr
-    
-    def _put_tarr(self):
-        self._tarr = None
 
     def _get_qp_occupations(self, qp_energy, degeneracy_tol=1e-10):
         occ = np.zeros(len(qp_energy), dtype=float)
@@ -295,7 +309,7 @@ class FermionGASCF(ABC):
             opmat = np.zeros((M, M), dtype=np.complex128)
             for alpha in range(M):
                 for b in range(M):
-                    opmat[alpha, b] = psi.conj().T @ (np.kron(C[alpha].T, C[b].T)) @ psi
+                    opmat[alpha, b] = _get_matrix_ip(psi, C[alpha].T @ psi @ C[b])
             R.append(opmat * (1/np.sqrt(nI*(1-nI))))
 
         return R
@@ -330,10 +344,10 @@ class FermionGASCF(ABC):
             for alpha in range(M):
                 for beta in range(M):
                     M1 = X[alpha, beta]
-                    P[alpha, beta] = psi.conj() @ np.kron(M1, np.eye(2**M)) @ psi
+                    P[alpha, beta] = _get_matrix_ip(psi, M1 @ psi)
                     for a in range(M):
                         for b in range(M):
-                            G[alpha, beta, a, b] = psi.conj().T @ np.kron(M1, X[a, b]) @ psi
+                            G[alpha, beta, a, b] = _get_matrix_ip(psi, M1 @ psi @ X[a, b])
 
             nI = n[I]
             b = 1/np.sqrt(nI*(1-nI))
@@ -344,13 +358,13 @@ class FermionGASCF(ABC):
 
         return T, Tsrc
 
-    def _get_A(self, n, R, tarr, corr):
+    def _get_A(self, n, R, corr):
         arr = []
         N = self.N
         for K in range(N):
             nK = n[K]
             r = 0.5 * R[K] * (1/(1-nK) - 1/nK)
-            arr.append(sum((r.conj().T @ tarr[I, K].T @ R[I] @ self._get_block(corr, I, K)) for I in range(N)))
+            arr.append(sum((r.conj().T @ self._get_block(self._tblock, I, K).T @ R[I] @ self._get_block(corr, I, K)) for I in range(N)))
         return arr
 
     def _compute_Hqp(self, L, R):
@@ -365,11 +379,8 @@ class FermionGASCF(ABC):
         in the single-particle basis.
         """
         N = self.N
-        tarr = self._get_tarr()
-        t = np.block(tarr.tolist())
         Rblock = scipy.linalg.block_diag(*R)
-
-        Hqp = Rblock.T @ t @ Rblock.conj()
+        Hqp = Rblock.T @ self._tblock @ Rblock.conj()
 
         LH = []
         for I in range(N):
@@ -391,19 +402,19 @@ class FermionGASCF(ABC):
         """
         M = self.M[I]
         # get coefficients for embedding Hamiltonian
-        h = self._get_ht(I)
-        U = self._get_U(I)
+        h = self._harr[I]
+        U = self._Uarr[I]
         C = self._Cdict[M]
         # construct local Hamiltonian
         Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))
         Hloc += sum(U[a, b, c, d] * C[a].T @ C[b].T @ C[c] @ C[d] for a in range(M) for b in range(M) for c in range(M) for d in range(M))
         # construct lambda part of the Hamiltonian
-        HL = np.kron(np.eye(2**M), sum(Lc[I][a, b] * C[b].T @ C[a] for a in range(M) for b in range(M)))
+        HL = np.kron(np.eye(2**M), sum(Lc[I][a, b] * C[a].T @ C[b] for a in range(M) for b in range(M)))
         # construct and solve embedding Hamiltonian
-        Hemb = np.kron(Hloc, np.eye(2**M)) + HL + HL.T.conj()
+        Hemb = np.kron(Hloc.T, np.eye(2**M)) + HL + HL.T.conj()
         return Hemb
     
-    def _get_HK(self, K, n, Lc, R, tarr, corr):
+    def _get_HK(self, K, n, Lc, R, corr):
         N = self.N
         M = self.M[K]
         C = self._Cdict[M]
@@ -414,9 +425,41 @@ class FermionGASCF(ABC):
         HD = self._compute_Hemb(K, Lc)
         HDqp = np.zeros((4**M, 4**M), dtype=np.complex128)
         for I in range(N):
-            M1 = tarr[I, K].T @ R[I] @ self._get_block(corr, I, K) @ B
-            HDqp += sum((M1[alpha, gamma] * np.kron(C[alpha], C[gamma])) for alpha in range(M) for gamma in range(M))
+            M1 = self._get_block(self._tblock, I, K).T @ R[I] @ self._get_block(corr, I, K) @ B
+            HDqp += sum((M1[alpha, gamma] * np.kron(C[alpha].T, C[gamma].T)) for alpha in range(M) for gamma in range(M))
         HD += HDqp + HDqp.conj().T
+        return HD
+    
+    def _compute_Hemb_psi(self, I, Lc, psiarr):
+        M = self.M[I]
+        # get coefficients for embedding Hamiltonian
+        h = self._harr[I]
+        U = self._Uarr[I]
+        C = self._Cdict[M]
+        # construct local Hamiltonian
+        Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))
+        Hloc += sum(U[a, b, c, d] * C[a].T @ C[b].T @ C[c] @ C[d] for a in range(M) for b in range(M) for c in range(M) for d in range(M))
+        # construct lambda part of the Hamiltonian
+        HL = sum(Lc[I][a, b] * C[a].T @ C[b] for a in range(M) for b in range(M))
+        HL += HL.conj().T
+        # return matrix vector product
+        P = psiarr[I]
+        return (Hloc @ P) + (P @ HL)
+    
+    def _compute_HKD_psi(self, K, n, R, corr, psiarr):
+        M = self.M[K]
+        C = self._Cdict[M]
+        nK = n[K]
+        B = np.diag(1/np.sqrt(nK*(1- nK)))
+
+        # construct derivative Hamiltonian vector product
+        psi = psiarr[K]
+        HD = np.zeros_like(psi)
+        M1 = sum(self._get_block(self._tblock, I, K).T @ R[I] @ self._get_block(corr, I, K) for I in range(self.N)) @ B
+        for alpha in range(M):
+            for a in range(M):
+                HD += M1[alpha, a] * (C[alpha].T @ psi @ C[a])
+                HD += M1[alpha, a].conj() * (C[alpha] @ psi @ C[a].T)
         return HD
     
     def _compute_derivative_energy(self, eigmatrix, DH, occ):
@@ -454,16 +497,16 @@ class FermionGASCF(ABC):
 
         # get embedding Hamiltonian expectations and normalization terms
         for I in range(N):
-            Hemb = self._compute_Hemb(I, Lc)
+            Hemb_psi = self._compute_Hemb_psi(I, Lc, psiarr)
             psi = psiarr[I]
-            Lag += psi.T.conj() @ Hemb @ psi
+            Lag += np.trace(psi.T.conj() @ Hemb_psi)
             # calculate Ec contribution
-            Lag += Ec[I] * (1 - (psi.T.conj() @ psi))
+            Lag += Ec[I] * (1 - np.trace(psi.T.conj() @ psi))
 
         #  calculate Lmix
         Lmix = -sum(np.trace((L[I] + Lc[I]) @ np.diag(n[I])) for I in range(N))
         Lag += Lmix + Lmix.conj()
-
+        
         return Lag.real
 
     def _compute_gradient(self, x):
@@ -501,11 +544,10 @@ class FermionGASCF(ABC):
 
         """
         N = self.N
-        tarr = self._get_tarr()
         psiarr, L, Lc, n, Ec = self._unpack_vector(x)
 
         # get energy gradients
-        grad_Ec = [1 - (psiarr[I].T.conj() @ psiarr[I]) for I in range(N)]
+        grad_Ec = [1 - np.trace(psiarr[I].T.conj() @ psiarr[I]) for I in range(N)]
 
         # get quasiparticle and embedding Hamiltonians
         R = self._compute_renormalizations(psiarr, n)
@@ -519,8 +561,9 @@ class FermionGASCF(ABC):
         # get <psi_K| gradients, each of size 4**M
         grad_psiarr = []
         for K in range(N):
-            HD = self._get_HK(K, n, Lc, R, tarr, corr) - Ec[K]*np.eye(4**self.M[K])
-            grad_psiarr.append(HD @ psiarr[K])
+            HD = self._compute_Hemb_psi(K, Lc, psiarr) - Ec[K]*psiarr[K]
+            HD += self._compute_HKD_psi(K, n, R, corr, psiarr)
+            grad_psiarr.append(HD)
 
         # get lambda gradients
         grad_L = []
@@ -541,17 +584,17 @@ class FermionGASCF(ABC):
             M = self.M[I]
             Lm = np.zeros((M,M), dtype=np.complex128)
             C = self._Cdict[M]
-            psivec = psiarr[I]
+            psi = psiarr[I]
             for a in range(M):
                 for b in range(M):
-                    Lm[a,b] = psivec.conj().T @ np.kron(np.eye(2**M), C[b].T @ C[a]) @ psivec
+                    Lm[a,b] = _get_matrix_ip(psi, psi @ C[a].T @ C[b])
             idx = np.arange(M)
             Lm[idx, idx] -= n[I]
             grad_Lc.append(Lm)
 
         # get n gradients
         grad_n = []
-        Aarr = self._get_A(n, R, tarr, corr)
+        Aarr = self._get_A(n, R, corr)
         for K in range(N):
             M1 = Aarr[K]
             M1 -= L[K] + Lc[K]
@@ -581,9 +624,9 @@ class FermionGASCF(ABC):
 
             # get projector and normalized phi matrix for the evenly filled state
             narr.append(M*[self.filling])
-            psivec = get_psi_vector(np.eye(2**M))
-            psivec = psivec / np.linalg.norm(psivec)
-            psiarr.append(psivec)
+            psi = np.eye(2**M)
+            psi = psi / np.linalg.norm(psi)
+            psiarr.append(psi)
 
         Ec = np.zeros(N)
         return self._pack_vector(psiarr, L, Lc, narr, Ec)
@@ -604,10 +647,7 @@ class FermionGASCF(ABC):
             self._init_guess = '1e'
             self.direct_scf = False
 
-            harr = [gascf._get_ht(I) for I in range(gascf.N)]
-            tarr = gascf._get_tarr()
-
-            self._h1e = scipy.linalg.block_diag(*harr) + np.block(tarr.tolist())
+            self._h1e = scipy.linalg.block_diag(*gascf._harr) + gascf._tblock
 
         def get_hcore(self, mol=None):
             return self._h1e
@@ -627,7 +667,7 @@ class FermionGASCF(ABC):
             for I in range(self.gascf.N):
                 sl = slice(gascf._Moff[I], gascf._Moff[I+1])
                 CI = dm[sl, sl]
-                U = gascf._get_U(I)
+                U = gascf._Uarr[I]
                 vHF[sl, sl] += (
                     np.einsum('iabj,ab->ij', U, CI)
                   + np.einsum('aijb,ab->ij', U, CI)
@@ -670,19 +710,18 @@ class FermionGASCF(ABC):
         L = [None] * N
         Lc = [None] * N
         Ec = np.zeros(N)
-
-        tarr = self._get_tarr()
         fock = mf.get_hcore() + mf.get_veff()
         fock = U.conj().T @ fock @ U
         L = [0.5*self._get_block(fock, I, I) for I in range(N)]
         for _ in range(50):
             prev_psiarr = [psi.copy() for psi in psiarr]
+            psiarr = [get_psi_matrix(psi) for psi in psiarr]
             R = self._compute_renormalizations(psiarr, narr)
-            Aarr = self._get_A(narr, R, tarr, corr)
+            Aarr = self._get_A(narr, R, corr)
             for I in range(N):
                 Lc[I] = Aarr[I] - L[I]
             for I in range(N):
-                HK = self._get_HK(I, narr, Lc, R, tarr, corr)
+                HK = self._get_HK(I, narr, Lc, R, corr)
                 eigval, eigvec = np.linalg.eigh(HK)
                 psiarr[I] = eigvec[:, 0]
                 Ec[I] = eigval[0]
@@ -691,13 +730,12 @@ class FermionGASCF(ABC):
 
         # ------------------------------------------
 
-        # tarr = self._get_tarr()
         # fock = mf.get_hcore() #+ mf.get_veff()
         # best_norm = np.inf
         # for j in range(50):
         #     print(f"Iteration {j}")
         #     R = self._compute_renormalizations(psiarr, narr)
-        #     Aarr = self._get_A(narr, R, tarr, corr)
+        #     Aarr = self._get_A(narr, R, corr)
 
         #     Uarr = [None] * N
         #     for I in range(N):
@@ -706,7 +744,7 @@ class FermionGASCF(ABC):
         #         LC = np.zeros((self.M[I], self.M[I]), dtype=np.complex128)
         #         L[I] = LM
         #         Lc[I] = LC
-        #         HK = self._get_HK(I, narr, Lc, R, tarr, corr)
+        #         HK = self._get_HK(I, narr, Lc, R, corr)
         #         eigval, eigvec = np.linalg.eigh(HK)
         #         psiarr[I] = eigvec[:, 0]
         #         Ec[I] = eigval[0]
@@ -740,8 +778,7 @@ class FermionGASCF(ABC):
         # -----------------------------------------
 
         # R = self._compute_renormalizations(psiarr, narr)
-        # tarr = self._get_tarr()
-        # Aarr = self._get_A(narr, R, tarr, corr)
+        # Aarr = self._get_A(narr, R, corr)
         # fock = mf.get_hcore() + mf.get_veff()
 
         # for K in range(N):
@@ -749,10 +786,11 @@ class FermionGASCF(ABC):
         #     LC = Aarr[K] - LM
         #     L[K] = LM
         #     Lc[K] = LC
-        #     HK = self._get_HK(K, narr, Lc, R, tarr, corr)
+        #     HK = self._get_HK(K, narr, Lc, R, corr)
         #     psi = psiarr[K]
         #     Ec[K] = (psi.conj().T @ HK @ psi).real / (np.linalg.norm(psi)**2)
 
+        psiarr = [get_psi_matrix(psi) for psi in psiarr]
         x = self._pack_vector(psiarr, L, Lc, narr, Ec)
         if verbose:
             print(f"EGA={self._compute_lagrangian(x)}, EGHF={mf.e_tot}, (EGA - EGHF)/EGHF = {(self._compute_lagrangian(x) - mf.e_tot)/mf.e_tot}")
@@ -778,12 +816,12 @@ class FermionGASCF(ABC):
         Rblock = scipy.linalg.block_diag(*R)
         expcorr = Rblock @ corr @ Rblock.T.conj()
         for I in range(self.N):
-            psi = get_psi_matrix(psiarr[I])
+            psi = psiarr[I]
             M = self.M[I]
             C = self._Cdict[M]
             for a in range(M):
                 for b in range(M):
-                    expcorr[self._Moff[I]+a, self._Moff[I]+b] = np.trace(psi.conj().T @ C[a].T @ C[b] @ psi)
+                    expcorr[self._Moff[I]+a, self._Moff[I]+b] = _get_matrix_ip(psi, C[a].T @ C[b] @ psi)
 
         return expcorr
 
@@ -812,8 +850,12 @@ class FermionGASCF(ABC):
         The kernel returns a ``FermionGASCFResult`` object that can be queried for success status and values of Lagrange multipliers, Gutzwiller parameters and projectors, and correlation functions.
         """
         # create initial guess and solve
-        self._put_ht()
-        self._put_tarr()
+        self._put_harr()
+        self._put_tblock()
+        self._put_Uarr
+        self._get_harr()
+        self._get_tblock()
+        self._get_Uarr()
         if (x0 is None):
             x0, hfres = self._get_initial_guess(verbose=verbose, hf=hf)
         elif hf:
@@ -878,8 +920,9 @@ class FermionGASCF(ABC):
         expcorr = self._compute_1body_correlations(qp_coeff, R, psiarr, qp_energy)
         T, Tsrc = self._compute_density_renormalizations(psiarr, n)
 
-        self._put_ht()
-        self._put_tarr()
+        self._put_harr()
+        self._put_tblock()
+        self._put_Uarr()
 
         return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec, T=T, Tsrc=Tsrc, result=result, corr=expcorr, hfres=hfres)
 
@@ -890,7 +933,7 @@ class FermionGASCFResult:
         self.Ne = Ne
         self._Moff = Moff
         self.E = E
-        self.psiarr = [get_psi_matrix(psiarr[I]) for I in range(N)]
+        self.psiarr = psiarr
         self.L = L
         self.Lc = Lc
         self.n = n
@@ -948,7 +991,7 @@ class FermionGASCFResult:
                 for b in range(M):
                     for c in range(M):
                         for d in range(M):
-                            corr2[a,b,c,d] = np.trace(psi.conj().T @ C[a].T @ C[b] @ C[c].T @ C[d] @ psi)
+                            corr2[a,b,c,d] = _get_matrix_ip(psi, C[a].T @ C[b] @ C[c].T @ C[d] @ psi)
 
         else:
             r"""
