@@ -3,6 +3,7 @@ import scipy.linalg
 import scipy.optimize
 from abc import ABC, abstractmethod
 from pyscf import scf, gto
+import time
 
 # matrix indices are given by (I, alpha) where I denotes the site, alpha the local state
 # The ordering of matrix indices is given by (0,1), ... , (0, M), (1,0), ..., (1,M), ..., (N,M)
@@ -96,6 +97,14 @@ class FermionGASCF(ABC):
         self._put_harr()
         self._put_tblock()
         self._put_Uarr()
+
+        self._grad_time = []
+        self._ren_time = []
+        self._qp_time = []
+        self._L_time = []
+        self._Lc_time = []
+        self._psi_time = []
+        self._n_time = []
 
     @abstractmethod
     def get_ht(self, I):
@@ -297,6 +306,7 @@ class FermionGASCF(ABC):
              \mathcal{R}^I_{\alpha a} = \dfrac{\text{Tr} \left[ \phi_I^\dagger c_\alpha^\dagger \phi_I c_a \right]}{\sqrt{n_a^I(1-n_a^I)}} 
 
         """
+        t = time.time()
         R = []
         for I in range(self.N):
             # get local state and correlation
@@ -311,7 +321,8 @@ class FermionGASCF(ABC):
                 for a in range(M):
                     opmat[alpha, a] = _get_matrix_ip(psi, C[alpha].T @ psi @ C[a])
             R.append(opmat * (1/np.sqrt(nI*(1-nI))))
-
+        
+        self._ren_time[-1] += time.time() - t
         return R
 
     def _compute_density_renormalizations(self, psiarr, n):
@@ -543,6 +554,14 @@ class FermionGASCF(ABC):
             (B^K)_{ab} = \dfrac{\delta_{ab}}{\sqrt{n^K_a(1-n^K_a)}}
 
         """
+        self._grad_time.append(0)
+        self._ren_time.append(0)
+        self._qp_time.append(0)
+        self._L_time.append(0)
+        self._Lc_time.append(0)
+        self._psi_time.append(0)
+        self._n_time.append(0)
+        t = time.time()
         N = self.N
         psiarr, L, Lc, n, Ec = self._unpack_vector(x)
 
@@ -551,21 +570,26 @@ class FermionGASCF(ABC):
 
         # get quasiparticle and embedding Hamiltonians
         R = self._compute_renormalizations(psiarr, n)
+        tqp = time.time()
         Hqp = self._compute_Hqp(L, R)
         qp_energy, qp_coeff = np.linalg.eigh(Hqp)
         qp_occ = self._get_qp_occupations(qp_energy)
 
         # compute single particle correlations
         corr = self._compute_qp_density(qp_coeff, qp_energy)
+        self._qp_time[-1] += time.time() - tqp
 
         # get <psi_K| gradients, each of size 4**M
+        tpsi = time.time()
         grad_psiarr = []
         for K in range(N):
             HD = self._compute_Hemb_psi(K, Lc, psiarr) - Ec[K]*psiarr[K]
             HD += self._compute_HKD_psi(K, n, R, corr, psiarr)
             grad_psiarr.append(HD)
+        self._psi_time[-1] += time.time() - tpsi
 
         # get lambda_c gradients
+        tLc = time.time()
         grad_Lc = []
         for I in range(N):
             M = self.M[I]
@@ -578,24 +602,30 @@ class FermionGASCF(ABC):
             idx = np.arange(M)
             Lm[idx, idx] -= n[I]
             grad_Lc.append(Lm)
+        self._Lc_time[-1] += time.time() - tLc
 
         # get n gradients
+        tn = time.time()
         grad_n = []
         Aarr = self._get_A(n, R, corr)
         for K in range(N):
             M1 = Aarr[K]
             M1 -= L[K] + Lc[K]
             grad_n.append(2*np.diag(M1).real)
+        self._n_time[-1] += time.time() - tn
 
         # get lambda gradients
+        tL = time.time()
         idx = np.arange(self._Moff[-1])
         Lm = corr
         Lm[idx, idx] -= np.concatenate(n)
         grad_L = [self._get_block(Lm, I, I) for I in range(N)]
+        self._L_time[-1] += time.time() - tL
 
         # return packed vector wrt x and y derivatives
         f = lambda grad: [2*G.conj() for G in grad]
         g = lambda grad: [2*G for G in grad]
+        self._grad_time[-1] += time.time() - t
         return self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), grad_n, grad_Ec)
 
     def _get_static_initial_guess(self):
@@ -671,6 +701,7 @@ class FermionGASCF(ABC):
             return vHF
 
     def _get_initial_guess(self, verbose=True, hf=True):
+        self._ren_time = [0]
         # get GHF 1-body correlations in the natural basis
         mf = self._GHF(self, verbose=verbose)
         mf.kernel()
@@ -794,6 +825,7 @@ class FermionGASCF(ABC):
 
         if hf:
             return x, {"converged":mf.converged, "e_tot":mf.e_tot}
+        self._ren_time = []
         return x, None
 
     def _compute_1body_correlations(self, qp_coeff, R, psiarr, qp_energy):
@@ -902,6 +934,21 @@ class FermionGASCF(ABC):
             options['fatol'] = tolerance
             result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
 
+        print(f"Gradient total time: {sum(self._grad_time)}")
+        print(f"Renormalization time: {sum(self._ren_time)}")
+        print(f"psi gradient correlation time: {sum(self._psi_time)}")
+        print(f"QP correlation time: {sum(self._qp_time)}")
+        print(f"L gradient time: {sum(self._L_time)}")
+        print(f"Lc gradient time: {sum(self._Lc_time)}")
+        print(f"n gradient time: {sum(self._n_time)}")
+        print("-------------------------")
+        print(f"Renormalization time: {100*sum(self._ren_time)/sum(self._grad_time)}%")
+        print(f"psi gradient correlation time: {100*sum(self._psi_time)/sum(self._grad_time)}%")
+        print(f"QP correlation time: {100*sum(self._qp_time)/sum(self._grad_time)}%")
+        print(f"L gradient time: {100*sum(self._L_time)/sum(self._grad_time)}%")
+        print(f"Lc gradient time: {100*sum(self._Lc_time)/sum(self._grad_time)}%")
+        print(f"n gradient time: {100*sum(self._n_time)/sum(self._grad_time)}%")
+        breakpoint()
         # parse result
         psiarr, L, Lc, n, Ec = self._unpack_vector(result.x)
         R = self._compute_renormalizations(psiarr, n)
