@@ -167,7 +167,7 @@ class FermiHubbard(FermionGASCF):
         res = self.kernel(verbose=verbose, **kwargs)    
         
         qxS, qyS, S = self._spin_structure_factor(res)
-        qxN, qyN, N = self._spin_structure_factor(res)
+        qxN, qyN, N = self._charge_structure_factor(res)
 
         if verbose:
             print(f"<Sz> = {0.5 * sum(np.trace(res.get_1body_corr(I, I) @ np.diag([1,-1])) for I in range(self.N))}")

@@ -294,7 +294,7 @@ class FermionGASCF(ABC):
 
         .. math::
 
-             \mathcal{R}^I_{\alpha a} = \dfrac{\bra{\Psi_I} c_{\alpha}^\dagger f_{b}^\dagger \ket{\Psi_I}}{\sqrt{n_a^I(1-n_a^I)}} 
+             \mathcal{R}^I_{\alpha a} = \dfrac{\text{Tr} \left[ \phi_I^\dagger c_\alpha^\dagger \phi_I c_a \right]}{\sqrt{n_a^I(1-n_a^I)}} 
 
         """
         R = []
@@ -308,8 +308,8 @@ class FermionGASCF(ABC):
             # compute R
             opmat = np.zeros((M, M), dtype=np.complex128)
             for alpha in range(M):
-                for b in range(M):
-                    opmat[alpha, b] = _get_matrix_ip(psi, C[alpha].T @ psi @ C[b])
+                for a in range(M):
+                    opmat[alpha, a] = _get_matrix_ip(psi, C[alpha].T @ psi @ C[a])
             R.append(opmat * (1/np.sqrt(nI*(1-nI))))
 
         return R
@@ -320,8 +320,8 @@ class FermionGASCF(ABC):
 
         .. math::
 
-            \mathcal{T}^I_{\alpha\beta,ab} &= \dfrac{\bra{\Psi_I} c_{\alpha}^\dagger c_\beta (f_a^\dagger f_b - \delta_{ab}n^I_a \mathbb{I}) \ket{\Psi_I}}{\sqrt{n^I_an^I_b(1-n^I_a)(1-n^I_b)}} \\
-            \mathcal{T}^I_{\alpha\beta} &= \bra{\Psi_I} c_\alpha^\dagger c_\beta \ket{\Psi_I} - \sum_{a} \mathcal{T}^I_{\alpha\beta, aa}n^I_{a}
+            \mathcal{T}^I_{\alpha\beta,ab} &= \dfrac{\text{Tr} \left[ \hi_I^\dagger c_{\alpha}^\dagger c_\beta \phi_I (c_a^\dagger c_b - \delta_{ab}n^I_a \mathbb{I}) \right]}{\sqrt{n^I_an^I_b(1-n^I_a)(1-n^I_b)}} \\
+            \mathcal{T}^I_{\alpha\beta} &= \text{Tr} \left[ c_\alpha^\dagger c_\beta \right] - \sum_{a} \mathcal{T}^I_{\alpha\beta, aa}n^I_{a}
 
         """
         Xdict = {}
@@ -395,8 +395,8 @@ class FermionGASCF(ABC):
 
         .. math::
 
-            \hat{H}_{emb}^I &= \displaystyle\sum_{\alpha\beta} \tilde{h}^{I}_{\alpha\beta}c^\dagger_{\alpha}c_{\beta} + \sum_{\alpha\beta\gamma\delta}U^{I}_{\alpha\beta\gamma\delta}c^\dagger_\alpha c_\beta^\dagger c_\gamma c_\delta \\
-            &+ \displaystyle\sum_{ab} \left[ (\lambda_c^I)_{ab}f_b^\dagger f_a + h.c. \right]
+            \hat{H}_{emb}^I &= \displaystyle\sum_{\alpha\beta} \tilde{h}^{I}_{\alpha\beta}c^\dagger_{\beta}c_{\alpha} + \sum_{\alpha\beta\gamma\delta}U^{I}_{\alpha\beta\gamma\delta}c^\dagger_\delta c_\gamma^\dagger c_\beta c_\alpha \\
+            &+ \displaystyle\sum_{ab} \left[ (\lambda_c^I)_{ab}f_a^\dagger f_b + h.c. \right]
 
         in the mixed tensor-product basis.
         """
@@ -419,13 +419,13 @@ class FermionGASCF(ABC):
         M = self.M[K]
         C = self._Cdict[M]
         nK = n[K]
-        B = np.diag(1/np.sqrt(nK*(1- nK)))
+        Bv = 1/np.sqrt(nK*(1- nK))
         
         # construct derivative Hamiltonian
         HD = self._compute_Hemb(K, Lc)
         HDqp = np.zeros((4**M, 4**M), dtype=np.complex128)
         for I in range(N):
-            M1 = self._get_block(self._tblock, I, K).T @ R[I] @ self._get_block(corr, I, K) @ B
+            M1 = self._get_block(self._tblock, I, K).T @ R[I] @ self._get_block(corr, I, K) * Bv
             HDqp += sum((M1[alpha, gamma] * np.kron(C[alpha].T, C[gamma].T)) for alpha in range(M) for gamma in range(M))
         HD += HDqp + HDqp.conj().T
         return HD
@@ -450,16 +450,16 @@ class FermionGASCF(ABC):
         M = self.M[K]
         C = self._Cdict[M]
         nK = n[K]
-        B = np.diag(1/np.sqrt(nK*(1- nK)))
+        Bv = 1/np.sqrt(nK*(1- nK))
 
         # construct derivative Hamiltonian vector product
         psi = psiarr[K]
         HD = np.zeros_like(psi)
-        M1 = sum(self._get_block(self._tblock, I, K).T @ R[I] @ self._get_block(corr, I, K) for I in range(self.N)) @ B
+        M1 = sum(self._get_block(self._tblock, I, K).T @ R[I] @ self._get_block(corr, I, K) for I in range(self.N)) * Bv
         for alpha in range(M):
             for a in range(M):
-                HD += M1[alpha, a] * (C[alpha].T @ psi @ C[a])
-                HD += M1[alpha, a].conj() * (C[alpha] @ psi @ C[a].T)
+                HD += M1[alpha, a] * (C[alpha] @ psi @ C[a].T)
+                HD += M1[alpha, a].conj() * (C[alpha].T @ psi @ C[a])
         return HD
     
     def _compute_derivative_energy(self, eigmatrix, DH, occ):
@@ -517,7 +517,7 @@ class FermionGASCF(ABC):
 
             \dfrac{\partial \mathcal{L}_e}{\partial E_c^K} &= 1 - \braket{\Psi_K} \\
             \dfrac{\partial \mathcal{L}_e}{\partial \lambda^K_{ab}} &= \bra{\Psi_0^e} c_{Ka}^\dagger c_{Kb} \ket{\Psi_0^e} - \Delta^K_{ab} \\
-            \dfrac{\partial \mathcal{L}_e}{\partial (\lambda^K_c)_{ab}} &= \bra{\Psi_K} f_b^\dagger f_a \ket{\Psi_K} - \Delta^K_{ab} \\
+            \dfrac{\partial \mathcal{L}_e}{\partial (\lambda^K_c)_{ab}} &= \bra{\Psi_K} f_a^\dagger f_b \ket{\Psi_K} - \Delta^K_{ab} \\
             \dfrac{\partial{\mathcal{L}_e}}{\partial n^K_z} &= 2 \text{Re} \mathcal{A}^K_{zz} \\
             \dfrac{\partial \mathcal{L}_e}{\partial \bra{\Psi_K}} &= \hat{H}^K \ket{\Psi_K}
 
@@ -534,7 +534,7 @@ class FermionGASCF(ABC):
         .. math::
 
             \hat{H}^K &= \hat{H}^K_{emb} - E_c^K \mathbb{I} \\
-            &+ \sum_{\alpha\gamma} \left[ \left[\sum_I \tilde{t}^{{IK}^T} \mathcal{R}^I \Delta^{IK}  {B^K} \right]_{\alpha\gamma} c_\alpha f_\gamma\right] + h.c. \\
+            &+ \sum_{\alpha\gamma} \left[ \left[\sum_I \tilde{t}^{{IK}^T} \mathcal{R}^I \Delta^{IK}  {B^K} \right]_{\alpha\gamma} c_\alpha^\dagger f_\gamma^\dagger \right] + h.c. \\
 
        Here, :math:`B^K` is a diagonal matrix with
 
