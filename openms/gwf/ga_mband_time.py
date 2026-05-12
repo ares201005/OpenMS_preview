@@ -934,6 +934,7 @@ class FermionGASCF(ABC):
             options['fatol'] = tolerance
             result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
 
+        # get runtime data
         print(f"Gradient total time: {sum(self._grad_time)}")
         print(f"Renormalization time: {sum(self._ren_time)}")
         print(f"psi gradient correlation time: {sum(self._psi_time)}")
@@ -948,7 +949,7 @@ class FermionGASCF(ABC):
         print(f"L gradient time: {100*sum(self._L_time)/sum(self._grad_time)}%")
         print(f"Lc gradient time: {100*sum(self._Lc_time)/sum(self._grad_time)}%")
         print(f"n gradient time: {100*sum(self._n_time)/sum(self._grad_time)}%")
-        breakpoint()
+
         # parse result
         psiarr, L, Lc, n, Ec = self._unpack_vector(result.x)
         R = self._compute_renormalizations(psiarr, n)
