@@ -206,11 +206,11 @@ class FermionGASCF(ABC):
 
         psiarr = []
         for I in range(N):
-            size_psi = 4**self.M[I]
-            Re = x[idx:(idx + size_psi)].reshape(size_psi)
-            idx += size_psi
-            Im = x[idx:(idx + size_psi)].reshape(size_psi)
-            idx += size_psi
+            size_psi = 2**self.M[I]
+            Re = x[idx:(idx + size_psi**2)].reshape(size_psi, size_psi)
+            idx += size_psi**2
+            Im = x[idx:(idx + size_psi**2)].reshape(size_psi, size_psi)
+            idx += size_psi**2
             psiarr.append(Re + 1j*Im)
 
         L = []
@@ -266,9 +266,9 @@ class FermionGASCF(ABC):
 
             # get projector and normalized phi matrix for the evenly filled state   
             narr.append(M*[self.filling])
-            psivec = get_psi_vector(np.eye(2**M))
-            psivec = psivec / np.linalg.norm(psivec)
-            psiarr.append(psivec)
+            psi = np.eye(2**M)
+            psi = psi / np.linalg.norm(psi)
+            psiarr.append(psi)
         
         Ec = np.zeros(N)
         return self._pack_vector(psiarr, L, Lc, narr, Ec)
@@ -347,7 +347,7 @@ class FermionGASCF(ABC):
                     else:
                         p *= n[i]
                 mat[state, state] = np.sqrt(p)
-            psiarr.append(get_psi_vector(mat))
+            psiarr.append(mat)
 
         fock = mf.get_hcore() + mf.get_veff()
         fock = U.conj().T @ fock @ U
@@ -432,12 +432,12 @@ class FermionGASCF(ABC):
         self._get_Uarr()
         if (x0 is None):
             x0, hfres = self._get_initial_guess(verbose=verbose, hf=hf)
-        # elif hf:
-        #     mf = self._GHF(self, verbose=verbose)
-        #     mf.kernel()
-        #     hfres = {"converged":mf.converged, "e_tot":mf.e_tot}
-        # else:
-        #     hfres = None
+        elif hf:
+            mf = self._GHF(self, verbose=verbose)
+            mf.kernel()
+            hfres = {"converged":mf.converged, "e_tot":mf.e_tot}
+        else:
+            hfres = None
 
         # solve
         options = {}
@@ -447,7 +447,155 @@ class FermionGASCF(ABC):
             options['disp'] = True
         options['fatol'] = tolerance
         result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
+        psiarr, L, Lc, n, Ec = self._unpack_vector(result.x)
         breakpoint()
 
         self._put_harr()
         self._put_tblock()
+        self._put_Uarr()
+
+    # --------------------------------------------------------
+
+    def _py_compute_renormalizations(self, psiarr, n):
+        r"""
+        Compute all 1-body renormalization factors, given by
+
+        .. math::
+
+             \mathcal{R}^I_{\alpha a} = \dfrac{\text{Tr} \left[ \phi_I^\dagger c_\alpha^\dagger \phi_I c_a \right]}{\sqrt{n_a^I(1-n_a^I)}} 
+
+        """
+        R = []
+        for I in range(self.N):
+            # get local state and correlation
+            M = self.M[I]
+            C = _get_annahilation_operators(M)
+            nI = n[I]
+            psi = psiarr[I]
+
+            # compute R
+            opmat = np.zeros((M, M), dtype=np.complex128)
+            for alpha in range(M):
+                for a in range(M):
+                    opmat[alpha, a] = _get_matrix_ip(psi, C[alpha].T @ psi @ C[a])
+            R.append(opmat * (1/np.sqrt(nI*(1-nI))))
+        return R
+    
+    def _compute_Hqp(self, L, R):
+        r"""
+        Compute
+
+        .. math::
+
+            \hat{H}_{qp} = & \sum_{IJ ab} \left[ \sum_{\alpha\beta}\tilde{t}^{IJ}_{\alpha\beta} \mathcal{R}^{I}_{\alpha a} \mathcal{R}^{J*}_{\beta b} \right] f^\dagger_{Ia}f_{Jb}  \\
+            & + \sum_{I ab} \left[ \lambda^I_{ab}f_{Ia}^\dagger f_{Ib} + h.c.  \right]
+
+        in the single-particle basis.
+        """
+        N = self.N
+        Rblock = scipy.linalg.block_diag(*R)
+        Hqp = Rblock.T @ self._tblock @ Rblock.conj()
+
+        LH = []
+        for I in range(N):
+            LH.append(L[I] + L[I].conj().T)
+        Hqp += scipy.linalg.block_diag(*LH)
+
+        return Hqp
+    
+    def _get_qp_corr(self, L, R):
+        qp_energy, qp_coeff = np.linalg.eigh(self._compute_Hqp(L, R))
+        occ = [(i < self.Ne) for i in range(self._Moff[-1])]
+        return qp_coeff[:, occ].conj() @ qp_coeff[:, occ].T
+    
+    def _get_gradL(self, corr, n):
+        N = self.N
+        idx = np.arange(self._Moff[-1])
+        Lm = corr
+        Lm[idx, idx] -= np.concatenate(n)
+        return  [self._get_block(Lm, I, I) for I in range(N)]
+    
+    def _get_gradLc(self, psiarr, n):
+        N = self.N
+        grad_Lc = []
+        for I in range(N):
+            M = self.M[I]
+            Lm = np.zeros((M,M), dtype=np.complex128)
+            C = _get_annahilation_operators(M)
+            psi = psiarr[I]
+            A = psi.conj().T @ psi
+            for a in range(M):
+                for b in range(M):
+                    Lm[a,b] = np.sum(C[a] * (C[b] @ A))
+            idx = np.arange(M)
+            Lm[idx, idx] -= n[I]
+            grad_Lc.append(Lm)
+        return grad_Lc
+    
+    def _get_A(self, n, R, corr):
+        arr = []
+        N = self.N
+        for K in range(N):
+            nK = n[K]
+            r = 0.5 * R[K] * (1/(1-nK) - 1/nK)
+            arr.append(sum((r.conj().T @ self._get_block(self._tblock, I, K).T @ R[I] @ self._get_block(corr, I, K)) for I in range(N)))
+        return arr
+
+    def _get_gradn(self, n, R, corr, L, Lc):
+        N = self.N
+        grad_n = []
+        Aarr = self._get_A(n, R, corr)
+        for K in range(N):
+            M1 = Aarr[K]
+            M1 -= L[K] + Lc[K]
+            grad_n.append(2*np.diag(M1).real)
+        return grad_n
+    
+    def _compute_Hemb_psi(self, I, Lc, psiarr):
+        M = self.M[I]
+        # get coefficients for embedding Hamiltonian
+        h = self._harr[I]
+        U = self._Uarr[I]
+        C = _get_annahilation_operators(M)
+        # construct local Hamiltonian
+        Hloc = sum((h[a, b] * C[a].T @ C[b]) for a in range(M) for b in range(M))
+        Hloc += sum(U[a, b, c, d] * C[a].T @ C[b].T @ C[c] @ C[d] for a in range(M) for b in range(M) for c in range(M) for d in range(M))
+        # construct lambda part of the Hamiltonian
+        HL = sum(Lc[I][a, b] * C[a].T @ C[b] for a in range(M) for b in range(M))
+        HL += HL.conj().T
+        # return matrix vector product
+        P = psiarr[I]
+        return (Hloc @ P) + (P @ HL)
+    
+    def _compute_HKD_psi(self, K, n, R, corr, psiarr):
+        M = self.M[K]
+        C = _get_annahilation_operators(M)
+        nK = n[K]
+        Bv = 1/np.sqrt(nK*(1- nK))
+
+        # construct derivative Hamiltonian vector product
+        psi = psiarr[K]
+        HD = np.zeros_like(psi)
+        M1 = sum(self._get_block(self._tblock, I, K).T @ R[I] @ self._get_block(corr, I, K) for I in range(self.N))
+        M1 = M1 * Bv
+        for alpha in range(M):
+            for a in range(M):
+                HD += M1[alpha, a] * (C[alpha] @ psi @ C[a].T)
+                HD += M1[alpha, a].conj() * (C[alpha].T @ psi @ C[a])
+        return HD
+    
+    def _get_gradpsi(self, L, Lc, psiarr, n, Ec):
+        N = self.N
+        grad_psiarr = []
+        R = self._py_compute_renormalizations(psiarr, n)
+        corr = self._get_qp_corr(L, R)
+        for K in range(N):
+            HD = self._compute_Hemb_psi(K, Lc, psiarr) - Ec[K]*psiarr[K]
+            HD += self._compute_HKD_psi(K, n, R, corr, psiarr)
+            grad_psiarr.append(HD)
+        return grad_psiarr
+    
+def _get_matrix_ip(psi, A):
+    M, _ = A.shape
+    psic = psi.conj().T
+    return sum(np.dot(psic[a,:], A[:,a]) for a in range(M))

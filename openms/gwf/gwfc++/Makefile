@@ -1,7 +1,8 @@
 GAFERMION=gafermion
 
 CXXFLAGS += -O3 -Wall -shared -std=c++11 -fPIC
-CXXFLAGS += $(shell pkg-config --cflags eigen3)
+CXXFLAGS += -fopenmp
+CXXFLAGS += -Wno-maybe-uninitialized $(shell pkg-config --cflags eigen3)
 
 PYTHON_CFLAGS += $(shell python3-config --cflags)
 PYTHON_CFLAGS += $(shell python3 -m pybind11 --includes)

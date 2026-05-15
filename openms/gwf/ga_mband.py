@@ -1,1 +1,1 @@
-ga_mband_time.py
+ga_mband_mixed.py

@@ -30,6 +30,10 @@ struct VecView {
         return Eigen::Map<Vec<T>>(data, size);
     }
 
+    Eigen::Map<Vec<T>> eigen() const {
+        return Eigen::Map<Vec<T>>(data, size);
+    }
+
     T& operator[](Eigen::Index i) {
         return data[i];
     }
@@ -48,7 +52,15 @@ struct MatView {
         return Eigen::Map<MatRM<T>>(data, rows, cols);
     }
 
+    Eigen::Map<MatRM<T>> eigen() const {
+        return Eigen::Map<MatRM<T>>(data, rows, cols);
+    }
+
     T& operator()(Eigen::Index i, Eigen::Index j) {
+        return data[i*cols + j];
+    }
+
+    T& operator()(Eigen::Index i, Eigen::Index j) const {
         return data[i*cols + j];
     }
 };
@@ -68,10 +80,14 @@ struct TensorView {
     T& operator()(Eigen::Index a, Eigen::Index b, Eigen::Index c, Eigen::Index d) {
         return data[((a*d1 + b)*d2 + c)*d3 + d];
     }
+
+    T& operator()(Eigen::Index a, Eigen::Index b, Eigen::Index c, Eigen::Index d) const {
+        return data[((a*d1 + b)*d2 + c)*d3 + d];
+    }
 };
 
 struct GradientInputView {
-    std::vector<VecView<complex128>> psiarr;
+    std::vector<MatView<complex128>> psiarr;
     std::vector<MatView<complex128>> L;
     std::vector<MatView<complex128>> Lc;
     std::vector<VecView<double>> n;
@@ -83,7 +99,7 @@ struct GradientInputView {
 };
 
 struct GradientOutputView {
-    std::vector<VecView<complex128>> psiarr;
+    std::vector<MatView<complex128>> psiarr;
     std::vector<MatView<complex128>> L;
     std::vector<MatView<complex128>> Lc;
     std::vector<VecView<double>> n;
