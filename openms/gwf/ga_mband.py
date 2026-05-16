@@ -1,1 +1,1 @@
-ga_mband_mixed.py
+gwfc++/ga_mband.py

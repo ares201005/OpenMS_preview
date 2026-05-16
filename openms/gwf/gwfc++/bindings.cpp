@@ -66,6 +66,66 @@ static TensorView<T> make_tensor_view(py::array_t<T, Flags>& arr) {
     };
 }
 
+static py::tuple py_compute_initial_guess(FermionGACPP& self,
+        py::sequence psiarr,
+        py::sequence L,
+        py::sequence n,
+        py::object corr_obj,
+        py::sequence harr,
+        py::object tblock_obj,
+        py::sequence Uarr,
+        int maxiter,
+        double tol
+) {
+    const py::ssize_t N = self.get_N();
+
+    // configure input format
+    InputView input;
+    input.psiarr.reserve(N);
+    input.L.reserve(N);
+    input.n.reserve(N);
+    input.harr.reserve(N);
+    input.Uarr.reserve(N);
+
+    // match with output format
+    InitialGuessResult result;
+    
+    // match format for input and output data
+    for (py::ssize_t I = 0; I < N; I++) {
+        auto psi = require_array<complex128>(psiarr[I]);
+        input.psiarr.push_back(make_mat_view<complex128>(psi));
+
+        auto LM = require_array<complex128>(L[I]);
+        input.L.push_back(make_mat_view<complex128>(LM));
+        
+        auto nvec = require_array<double>(n[I]);
+        input.n.push_back(make_vec_view(nvec));
+
+        auto h = require_array<complex128>(harr[I]);
+        input.harr.push_back(make_mat_view<complex128>(h));
+
+        auto U = require_array<complex128>(Uarr[I]);
+        input.Uarr.push_back(make_tensor_view<complex128>(U));
+    }
+
+    auto tblock = require_array<complex128>(tblock_obj);
+    input.tblock = make_mat_view<complex128>(tblock);
+
+    auto corr = require_array<complex128>(corr_obj);
+    auto corr_view = make_mat_view<complex128>(corr);
+    
+    {
+        py::gil_scoped_release release;
+        result = self.compute_initial_guess(input, corr_view, maxiter, tol);
+    }
+
+    return py::make_tuple(
+        result.psiarr,
+        result.Lc,
+        result.Ec
+    );
+}
+
 static std::vector<MatRM<complex128>> py_compute_renormalizations(FermionGACPP& self,
         py::sequence seq_psiarr,
         py::sequence seq_n
@@ -99,7 +159,7 @@ static py::tuple py_compute_gradient(FermionGACPP& self,
     const py::ssize_t N = self.get_N();
 
     // configure input format
-    GradientInputView input;
+    InputView input;
     input.psiarr.reserve(N);
     input.L.reserve(N);
     input.Lc.reserve(N);
@@ -108,41 +168,21 @@ static py::tuple py_compute_gradient(FermionGACPP& self,
     input.Uarr.reserve(N);
 
     // match with output format
-    GradientOutputView output;
-    output.psiarr.reserve(N);
-    output.L.reserve(N);
-    output.Lc.reserve(N);
-    output.n.reserve(N);
-    py::list grad_psiarr;
-    py::list grad_L;
-    py::list grad_Lc;
-    py::list grad_n;
+    GradientOutput output(N);
     
     // match format for input and output data
     for (py::ssize_t I = 0; I < N; I++) {
         auto psi = require_array<complex128>(psiarr[I]);
         input.psiarr.push_back(make_mat_view<complex128>(psi));
-        ArrayOut<complex128> gpsi({psi.shape(0), psi.shape(1)});
-        output.psiarr.push_back(make_mat_view<complex128>(gpsi));
-        grad_psiarr.append(gpsi);
 
         auto LM = require_array<complex128>(L[I]);
         input.L.push_back(make_mat_view<complex128>(LM));
-        ArrayOut<complex128> gL({LM.shape(0), LM.shape(1)});
-        output.L.push_back(make_mat_view<complex128>(gL));
-        grad_L.append(gL);
 
         auto LcM = require_array<complex128>(Lc[I]);
         input.Lc.push_back(make_mat_view<complex128>(LcM));
-        ArrayOut<complex128> gLc({LcM.shape(0), LcM.shape(1)});
-        output.Lc.push_back(make_mat_view<complex128>(gLc));
-        grad_Lc.append(gLc);
         
         auto nvec = require_array<double>(n[I]);
         input.n.push_back(make_vec_view(nvec));
-        ArrayOut<double> gn(nvec.shape(0));
-        output.n.push_back(make_vec_view<double>(gn));
-        grad_n.append(gn);
 
         auto h = require_array<complex128>(harr[I]);
         input.harr.push_back(make_mat_view<complex128>(h));
@@ -152,8 +192,6 @@ static py::tuple py_compute_gradient(FermionGACPP& self,
     }
     auto Ecvec = require_array<double>(Ec_obj);
     input.Ec = make_vec_view<double>(Ecvec);
-    ArrayOut<double> grad_Ec(Ecvec.shape(0));
-    output.Ec = make_vec_view(grad_Ec);
 
     auto tblock = require_array<complex128>(tblock_obj);
     input.tblock = make_mat_view<complex128>(tblock);
@@ -164,15 +202,15 @@ static py::tuple py_compute_gradient(FermionGACPP& self,
     }
 
     return py::make_tuple(
-        grad_psiarr,
-        grad_L,
-        grad_Lc,
-        grad_n,
-        grad_Ec
+        output.psiarr,
+        output.L,
+        output.Lc,
+        output.n,
+        output.Ec
     );
 }
 
-PYBIND11_MODULE(gafermion, m) {
+PYBIND11_MODULE(_gafermion, m) {
     py::class_<FermionGACPP>(m, "FermionGACPP")
         .def(py::init<std::vector<int>, int>())
         .def_property_readonly("N", &FermionGACPP::get_N)
@@ -180,6 +218,7 @@ PYBIND11_MODULE(gafermion, m) {
         .def_property_readonly("M", &FermionGACPP::get_M)
         .def_property_readonly("_Moff", &FermionGACPP::get_Moff)
 
+        .def("_get_initial_guess", &py_compute_initial_guess)
         .def("_compute_renormalizations", &py_compute_renormalizations)
         .def("_compute_gradient", &py_compute_gradient);
 }

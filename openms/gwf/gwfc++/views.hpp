@@ -86,7 +86,7 @@ struct TensorView {
     }
 };
 
-struct GradientInputView {
+struct InputView {
     std::vector<MatView<complex128>> psiarr;
     std::vector<MatView<complex128>> L;
     std::vector<MatView<complex128>> Lc;
@@ -98,12 +98,22 @@ struct GradientInputView {
     std::vector<TensorView<complex128>> Uarr;
 };
 
-struct GradientOutputView {
-    std::vector<MatView<complex128>> psiarr;
-    std::vector<MatView<complex128>> L;
-    std::vector<MatView<complex128>> Lc;
-    std::vector<VecView<double>> n;
-    VecView<double> Ec;
+struct GradientOutput {
+    std::vector<MatRM<complex128>> psiarr;
+    std::vector<MatRM<complex128>> L;
+    std::vector<MatRM<complex128>> Lc;
+    std::vector<Vec<double>> n;
+    std::vector<double> Ec;
+
+    GradientOutput() = default;
+
+    explicit GradientOutput(std::size_t N)
+        : psiarr(N),
+          L(N),
+          Lc(N),
+          n(N),
+          Ec(N)
+    {}
 };
 
 #endif

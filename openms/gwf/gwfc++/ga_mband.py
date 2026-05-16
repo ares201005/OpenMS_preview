@@ -1,34 +1,39 @@
-import numpy as np
 from abc import ABC, abstractmethod
-from pyscf import scf, gto
-from gafermion import FermionGACPP
-
+import numpy as np
 import scipy.linalg
+from pyscf import scf, gto
+
+from pathlib import Path
+import sys
+_this_dir = Path(__file__).resolve().parent
+if str(_this_dir) not in sys.path:
+    sys.path.insert(0, str(_this_dir))
+from _gafermion import FermionGACPP
 
 # matrix indices are given by (I, alpha) where I denotes the site, alpha the local state
 # The ordering of matrix indices is given by (0,1), ... , (0, M), (1,0), ..., (1,M), ..., (N,M)
 
-def get_psi_matrix(psi):
-    r"""
-    Convert state vector :math:`\ket{\Psi_I}` to matrix form :math:`\phi_I`.
-    """
-    psi_size = int(np.sqrt(psi.shape)[0])
-    matrix = np.zeros((psi_size, psi_size), dtype=psi.dtype)
-    for Gamma in range(psi_size):
-        for n in range(psi_size):
-            matrix[Gamma, n] = psi[Gamma*(psi_size) + n]
-    return matrix
+# def get_psi_matrix(psi):
+#     r"""
+#     Convert state vector :math:`\ket{\Psi_I}` to matrix form :math:`\phi_I`.
+#     """
+#     psi_size = int(np.sqrt(psi.shape)[0])
+#     matrix = np.zeros((psi_size, psi_size), dtype=psi.dtype)
+#     for Gamma in range(psi_size):
+#         for n in range(psi_size):
+#             matrix[Gamma, n] = psi[Gamma*(psi_size) + n]
+#     return matrix
 
-def get_psi_vector(psi):
-    r"""
-    Convert matrix :math:`\phi_I` to state vector :math:`\ket{\Psi_I}`.
-    """
-    a, b = psi.shape
-    vec = np.zeros(psi.size, dtype=psi.dtype)
-    for Gamma in range(a):
-        for n in range(b):
-            vec[Gamma*a + n] = psi[Gamma, n]
-    return vec
+# def get_psi_vector(psi):
+#     r"""
+#     Convert matrix :math:`\phi_I` to state vector :math:`\ket{\Psi_I}`.
+#     """
+#     a, b = psi.shape
+#     vec = np.zeros(psi.size, dtype=psi.dtype)
+#     for Gamma in range(a):
+#         for n in range(b):
+#             vec[Gamma*a + n] = psi[Gamma, n]
+#     return vec
 
 def _get_annahilation_operators(M):
     C = np.zeros((M, 2**M, 2**M))
@@ -55,6 +60,11 @@ def _compute_rdm(Delta):
     C = _get_annahilation_operators(M)
     rho = scipy.linalg.expm(sum(-K[a, b] * C[a].T @ C[b] for a in range(M) for b in range(M)))
     return (1/np.trace(rho)) * rho
+
+def _get_matrix_ip(psi, A):
+    M, _ = A.shape
+    psic = psi.conj().T
+    return sum(np.dot(psic[a,:], A[:,a]) for a in range(M))
 
 def _get_block(A, Moff, I, J):
     return A[Moff[I]:Moff[I+1], Moff[J]:Moff[J+1]]
@@ -318,12 +328,34 @@ class FermionGASCF(ABC):
                 )
 
             return vHF
+        
+    def _compute_1body_correlations(self, qp_coeff, R, psiarr, qp_energy):
+        r"""
+        Compute physical 1-body correlations under :math:`\ket{\Psi_G}` using:
+
+        :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Jb} \ket{\Psi_G} = \sum_{cd} \left[ \mathcal{R}^I_{ac} \Delta^{IJ}_{cd} \mathcal{R}^{J*}_{bd} \right]`
+        for :math:`I \neq J`.
+
+        :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} \ket{\Psi_G} = \text{Tr} \left[ \phi_I^\dagger c^\dagger_a c_b \phi_I  \right]` for each :math:`I`.
+        """
+        corr = self._compute_qp_density(qp_coeff, qp_energy)
+        Rblock = scipy.linalg.block_diag(*R)
+        expcorr = Rblock @ corr @ Rblock.T.conj()
+        for I in range(self.N):
+            psi = psiarr[I]
+            M = self.M[I]
+            C = self._Cdict[M]
+            for a in range(M):
+                for b in range(M):
+                    expcorr[self._Moff[I]+a, self._Moff[I]+b] = _get_matrix_ip(psi, C[a].T @ C[b] @ psi)
+
+        return expcorr
     
     def _get_initial_guess(self, verbose=True, hf=True):
         # get GHF 1-body correlations in the natural basis
         mf = self._GHF(self, verbose=verbose)
         mf.kernel()
-        pcorr = mf.make_rdm1().conj().T
+        pcorr = mf.make_rdm1().T
         Uarr = []
         narr = []
         N = self.N
@@ -352,20 +384,12 @@ class FermionGASCF(ABC):
         fock = mf.get_hcore() + mf.get_veff()
         fock = U.conj().T @ fock @ U
         L = [0.5*self._get_block(fock, I, I) for I in range(N)]
-
-        Lc = [None] * N
-        Ec = np.zeros(N)
-        # R = self._compute_renormalizations(psiarr, narr)
-        # Aarr = self._get_A(narr, R, self._tblock, corr)
-        # for I in range(N):
-        #     Lc[I] = np.zeros((self.M[I], self.M[I]), dtype=np.complex128)
-        #     HK = self._get_HK(I, narr, Lc, R, self._tblock, corr)
-        #     eigval, eigvec = np.linalg.eigh(HK)
-        #     psiarr[I] = eigvec[:, 0]
-        #     Ec[I] = eigval[0]
-        #     Lc[I] = Aarr[I] - L[I]
-        
-        x = self._get_static_initial_guess()
+        psiarr, Lc, Ec = self._gacpp._get_initial_guess(
+            psiarr, L, narr, corr,
+            self._harr, self._tblock, self._Uarr,
+            50, 1e-10
+        )
+        x = self._pack_vector(psiarr, L, Lc, narr, Ec)
         if hf:
             return x, {"converged":mf.converged, "e_tot":mf.e_tot}
         return x, None
@@ -410,7 +434,17 @@ class FermionGASCF(ABC):
         g = lambda grad: [2*G for G in grad]
         return self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), grad_n, grad_Ec)
     
-    def kernel(self, method="krylov", maxiter=None, x0=None, tolerance=1e-4, hf=True, x=False, verbose=True):
+    def kernel(
+        self,
+        method="krylov",
+        maxiter=None,
+        x0=None,
+        tolerance=1e-4,
+        hf=True,
+        x=False,
+        verbose=True,
+        n_bounds=(1e-8, 1 - 1e-8),
+    ):
         r"""
         Use root finding (via scipy.optimize.root) on the gradient to calculate the ground state via Newton's method
 
@@ -420,13 +454,14 @@ class FermionGASCF(ABC):
         :param tolerance: maximum acceptable gradient norm.  Default value is 1e-4.
         :param x: boolean specifying whether to included the packed vector in the result.  Default value is False.
         :param verbose: show verbose output regarding the Newton solver.  Default value is True.
+        :param n_bounds: lower and upper bounds for occupation variables when using ``method="least_squares"``.
 
         The kernel returns a ``FermionGASCFResult`` object that can be queried for success status and values of Lagrange multipliers, Gutzwiller parameters and projectors, and correlation functions.
         """
-        # create initial guess
+        # create initial guess and solve
         self._put_harr()
         self._put_tblock()
-        self._put_Uarr()
+        self._put_Uarr
         self._get_harr()
         self._get_tblock()
         self._get_Uarr()
@@ -438,21 +473,152 @@ class FermionGASCF(ABC):
             hfres = {"converged":mf.converged, "e_tot":mf.e_tot}
         else:
             hfres = None
-
-        # solve
         options = {}
         if maxiter:
             options['maxiter'] = maxiter
         if verbose:
             options['disp'] = True
-        options['fatol'] = tolerance
-        result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
+        if method == "least_squares":
+            nlo, nhi = n_bounds
+            bounds_lo = np.full_like(x0, -np.inf, dtype=float)
+            bounds_hi = np.full_like(x0, np.inf, dtype=float)
+            n_slice = self._get_n_slice()
+            bounds_lo[n_slice] = nlo
+            bounds_hi[n_slice] = nhi
+            x0 = np.array(x0, copy=True)
+            x0[n_slice] = np.clip(x0[n_slice], nlo, nhi)
+
+            def residual(z):
+                try:
+                    f = self._compute_gradient(z)
+                except (np.linalg.LinAlgError, FloatingPointError, ValueError):
+                    return np.full_like(x0, 1e12, dtype=float)
+                if not np.all(np.isfinite(f)):
+                    return np.full_like(x0, 1e12, dtype=float)
+                return f
+
+            result = scipy.optimize.least_squares(
+                residual,
+                x0,
+                bounds=(bounds_lo, bounds_hi),
+                xtol=tolerance,
+                ftol=tolerance,
+                gtol=tolerance,
+                max_nfev=maxiter,
+                verbose=2 if verbose else 0,
+            )
+            result.fun_norm = np.linalg.norm(result.fun)
+            if result.fun_norm <= tolerance:
+                result.success = True
+                result.message = f"{result.message} Residual norm {result.fun_norm:.6e} <= tolerance."
+            else:
+                result.success = False
+                result.message = f"{result.message} Residual norm {result.fun_norm:.6e} > tolerance."
+        else:
+            options['fatol'] = tolerance
+            result = scipy.optimize.root(self._compute_gradient, x0, method=method, options=options)
+
+        # parse result
         psiarr, L, Lc, n, Ec = self._unpack_vector(result.x)
-        breakpoint()
+        R = self._compute_renormalizations(psiarr, n)
+        Hqp = self._compute_Hqp(L, R)
+        qp_energy, qp_coeff = np.linalg.eigh(Hqp)
+        E = self._compute_lagrangian(result.x)
+        if (not x):
+            result.pop("x")
+        expcorr = self._compute_1body_correlations(qp_coeff, R, psiarr, qp_energy)
+        T, Tsrc = self._compute_density_renormalizations(psiarr, n)
 
         self._put_harr()
         self._put_tblock()
         self._put_Uarr()
+
+        return FermionGASCFResult(self._Moff, self.Ne, E, psiarr, L, Lc, n, Ec, T=T, Tsrc=Tsrc, result=result, corr=expcorr, hfres=hfres)
+
+class FermionGASCFResult:
+    def __init__(self, Moff, Ne, E, psiarr, L, Lc, n, Ec, T=None, Tsrc=None, result=None, corr=None, hfres=None):
+        N = len(Moff) - 1
+        self.N = N
+        self.Ne = Ne
+        self._Moff = Moff
+        self.E = E
+        self.psiarr = psiarr
+        self.L = L
+        self.Lc = Lc
+        self.n = n
+        self.Ec = Ec
+        self.result = result
+        self.corr = corr
+        self._has_T = (T is not None) and (Tsrc is not None)
+        if self._has_T:
+            self._T = T
+            self._Tsrc = Tsrc
+            TD = []
+            for I in range(N):
+                TD.append(np.einsum('abcc,c->ab', T[I], n[I]))
+            self._TD = TD
+
+        if (hfres is not None):
+            self.hf = hfres
+
+        projectors = []
+        for I in range(N):
+            projectors.append(self.psiarr[I] @ scipy.linalg.sqrtm(_compute_rdm(self.Delta(I))))
+        self.projectors = projectors
+
+    def Delta(self, I):
+        r"""
+        Return the matrix :math:`M_{ab} = \Delta^I_{ab} = \text{diag}(n^I)`.
+        """
+        return np.diag(self.n[I])
+
+    def get_1body_corr(self, I, J):
+        r"""
+        Return the matrix :math:`M_{ab} = \bra{\Psi_G} c^\dagger_{Ia} c_{Jb} \ket{\Psi_G}`.
+        """
+        if (self.corr is None):
+            return None
+        return _get_block(self.corr, self._Moff, I, J)
+
+    def get_density_corr(self, I, J):
+        r"""
+        Return the tensor :math:`M_{abcd} = \bra{\Psi_G} c^\dagger_{Ia} c_{Ib} c^\dagger_{Jc} c_{Jd} \ket{\Psi_G}`.
+        """
+        if not self._has_T:
+            return None
+        MI = self._Moff[I+1]-self._Moff[I]
+        MJ = self._Moff[J+1]-self._Moff[J]
+        corr2 = np.zeros((MI, MI, MJ, MJ), dtype=np.complex128)
+        if (I == J):
+            r"""
+            :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} c^\dagger_{Ic} c_{Id} \ket{\Psi_G} = \text{Tr} \left[ \phi_I^\dagger c^\dagger_a c_b c^\dagger_c c_d \phi_I  \right]`
+            """
+            M = MI
+            psi = self.psiarr[I]
+            C = _get_annahilation_operators(M)
+            for a in range(M):
+                for b in range(M):
+                    for c in range(M):
+                        for d in range(M):
+                            corr2[a,b,c,d] = _get_matrix_ip(psi, C[a].T @ C[b] @ C[c].T @ C[d] @ psi)
+
+        else:
+            r"""
+            :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} c^\dagger_{Jc} c_{Jd} \ket{\Psi_G} = \bra{\Psi_0^e} \left(\displaystyle\sum_{ef} \left[ \mathcal{T}^I_{ab,ef} f^\dagger_{Ie} f_{If} \right] + \mathcal{T}^I_{ab} \right) \left(\displaystyle\sum_{gh} \left[ \mathcal{T}^J_{cd,gh} f^\dagger_{Jg} f_{Jh} \right] + \mathcal{T}^J_{cd} \right) \ket{\Psi_0^e}`
+            Wick's theorem is OK here since the quaspiarticle states are a single Slater determinant.
+            """
+            corr2 = np.einsum('ab,cd->abcd', self._TD[I], self._TD[J])
+            corr2 += -np.einsum('abef,cdgh,gf,eh->abcd', self._T[I], self._T[J], self.get_1body_corr(J, I), self.get_1body_corr(I, J))
+            corr2 += np.einsum('ab,cd->abcd', self._TD[I], self._Tsrc[J])
+            corr2 += np.einsum('ab,cd->abcd', self._Tsrc[I], self._TD[J])
+
+        return corr2
+
+    def get_number_corr(self, I, J):
+        r"""
+        Return the matrix :math:`M_{ab} = \bra{\Psi_G} n_{Ia} n_{Jb} \ket{\Psi_G}` where :math:`n_{Ia} \equiv c^\dagger_{Ia} c_{Ia}`.
+        """
+        return np.einsum('aabb->ab', self.get_density_corr(I, J)).real
 
     # --------------------------------------------------------
 
@@ -594,8 +760,3 @@ class FermionGASCF(ABC):
             HD += self._compute_HKD_psi(K, n, R, corr, psiarr)
             grad_psiarr.append(HD)
         return grad_psiarr
-    
-def _get_matrix_ip(psi, A):
-    M, _ = A.shape
-    psic = psi.conj().T
-    return sum(np.dot(psic[a,:], A[:,a]) for a in range(M))

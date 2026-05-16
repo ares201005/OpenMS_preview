@@ -4,6 +4,12 @@
 #include <map>
 #include "views.hpp"
 
+struct InitialGuessResult {
+    std::vector<MatRM<complex128>> psiarr;
+    std::vector<MatRM<complex128>> Lc;
+    Vec<double> Ec;
+};
+
 class FermionGACPP {
 public:
     FermionGACPP(std::vector<int> M, int Ne);
@@ -12,13 +18,20 @@ public:
     std::vector<int> get_M() const;
     std::vector<int> get_Moff() const;
 
+    InitialGuessResult compute_initial_guess(
+        const InputView& input,
+        const MatView<complex128>& corr_view,
+        int max_iter,
+        double tol
+    ) const;
+
     std::vector<MatRM<complex128>> compute_renormalizations(
         const std::vector<MatView<complex128>>& psiarr,
         const std::vector<VecView<double>>& n
     ) const;
     void compute_gradient(
-        const GradientInputView& input,
-        GradientOutputView& output
+        const InputView& input,
+        GradientOutput& output
     ) const;
 
 private:
@@ -42,13 +55,12 @@ private:
     ) const;
 
     MatRM<complex128> compute_G(
-    int K,
-    const MatView<complex128>& tblock,
-    const std::vector<MatRM<complex128>>& R,
-    const MatRM<complex128>& corr
-) const;
-};
+        int K,
+        const MatView<complex128>& tblock,
+        const std::vector<MatRM<complex128>>& R,
+        Eigen::Ref<const MatRM<complex128>> corr
+    ) const;
 
-// use psimatrix instead of psivec if HK is unnecessary
+};
 
 #endif
