@@ -15,7 +15,7 @@ static std::vector<int> compute_Moff(std::vector<int> M) {
     return Moff;
 }
 
-static std::vector<MatRM<complex128>> get_annihilation_operators(int M) {
+std::vector<MatRM<complex128>> get_annihilation_operators(int M) {
     std::vector<MatRM<complex128>> ops;
     ops.reserve(M);
     const int dim = 1 << M;
@@ -55,6 +55,14 @@ std::map<int, std::vector<MatRM<complex128>>> FermionGACPP::get_Cdict() const {
     return Cdict;
 }
 
+std::map<int, std::vector<MatRM<complex128>>> FermionGACPP::return_Cdict() const {
+    return Cdict_;
+}
+
+std::vector<MatRM<complex128>> FermionGACPP::return_Cdict(int M) const {
+    return Cdict_.at(M);
+}
+
 FermionGACPP::FermionGACPP(std::vector<int> M, int Ne_) : 
     Mvec(std::move(M)),
     N(static_cast<int>(Mvec.size())),
@@ -79,7 +87,7 @@ std::vector<MatRM<complex128>> FermionGACPP::compute_renormalizations(
         for (int a = 0; a < M; a++) {
             double nIa = nI[a];
             for (int alpha = 0; alpha < M; alpha++) {
-                auto op = C[alpha].transpose() * psi * C[a];
+                MatRM<complex128> op = C[alpha].transpose() * psi * C[a];
                 RI(alpha, a) = matrix_ip(psi, op) / std::sqrt(nIa * (1.0 - nIa));
             }
         }
@@ -88,7 +96,7 @@ std::vector<MatRM<complex128>> FermionGACPP::compute_renormalizations(
     return R;
 }
 
-MatRM<complex128> FermionGACPP::compute_qp_corr(
+MatRM<complex128> FermionGACPP::compute_Hqp(
     const std::vector<MatView<complex128>>& L,
     const std::vector<MatRM<complex128>>& R,
     const MatView<complex128>& tblock
@@ -118,7 +126,16 @@ MatRM<complex128> FermionGACPP::compute_qp_corr(
         Hqp.block(i0, i0, Mi, Mi).noalias() += LI + LI.adjoint();
     }
 
+    return Hqp;
+}
+
+MatRM<complex128> FermionGACPP::compute_qp_corr(
+    const std::vector<MatView<complex128>>& L,
+    const std::vector<MatRM<complex128>>& R,
+    const MatView<complex128>& tblock
+) const {
     // diagonalize and compute 1-body QP correlation matrix
+    auto Hqp = compute_Hqp(L, R, tblock);
     Eigen::setNbThreads(omp_get_max_threads());
     Eigen::SelfAdjointEigenSolver<MatRM<complex128>> solver(Hqp);
     if (solver.info() != Eigen::Success) {
@@ -128,6 +145,46 @@ MatRM<complex128> FermionGACPP::compute_qp_corr(
     auto Vocc = V.leftCols(Ne);
     MatRM<complex128> corr = Vocc.conjugate() * Vocc.transpose();
     return corr;
+}
+
+MatRM<complex128> FermionGACPP::compute_1body_corr(
+    const std::vector<MatView<complex128>>& psiarr,
+    const std::vector<MatView<complex128>>& L,
+    const std::vector<VecView<double>>& n,
+    const MatView<complex128>& tblock
+) const {
+    auto t = tblock.eigen();
+    auto R = compute_renormalizations(psiarr, n);
+    auto corr = compute_qp_corr(L, R, tblock);
+    const int size = Moff_.back();
+    MatRM<complex128> expcorr(size, size);
+
+    Eigen::setNbThreads(1);
+    #pragma omp parallel for schedule(static)
+    for (int I = 0; I < N; I++) {
+        const int i0 = Moff_[I];
+        const int Mi = Mvec[I];
+        auto& C = Cdict_.at(Mi);
+        auto psi = psiarr[I].eigen();
+        for (int J = 0; J < N; J++) {
+            if (I != J) {
+                const int j0 = Moff_[J];
+                const int Mj = Mvec[J];
+                auto tIJ = t.block(i0, j0, Mi, Mj);
+                expcorr.block(i0, j0, Mi, Mj).noalias() = R[I] * tIJ * R[J].adjoint();
+            }
+            else {
+                for (int a = 0; a < Mi; a++) {
+                    for (int b = 0; b < Mi; b++) {
+                        MatRM<complex128> op = C[a].transpose() * C[b] * psi;
+                        expcorr(i0 + a, i0 + b) = matrix_ip(psi, op);
+                    }
+                }
+            }
+        }
+    }
+
+    return expcorr;
 }
 
 MatRM<complex128> FermionGACPP::compute_Hloc(
@@ -179,6 +236,19 @@ static MatView<T> make_mat_view_from_eigen(MatRM<T>& A) {
         A.rows(),
         A.cols()
     );
+}
+
+MatRM<complex128> FermionGACPP::get_1body_fock(Eigen::Ref<const MatRM<complex128>> A) const {
+    const int M = A.rows();
+    const auto& C = Cdict_.at(M);
+    const int dim = 1 << M;
+    MatRM<complex128> F = MatRM<complex128>::Zero(dim, dim);
+    for (int a = 0; a < M; a++) {
+        for (int b = 0; b < M; b++) {
+            F.noalias() += A(a, b) * C[a].transpose() * C[b];
+        }
+    }
+    return F;
 }
 
 InitialGuessResult FermionGACPP::compute_initial_guess(
@@ -235,14 +305,9 @@ InitialGuessResult FermionGACPP::compute_initial_guess(
             // get embedding Hamiltonian
             auto Hloc = compute_Hloc(input.harr[I], input.Uarr[I]);
             const auto& LcI = Lc[I];
-            MatRM<complex128> HL = MatRM<complex128>::Zero(dim, dim);
-            for (int a = 0; a < M; a++) {
-                for (int b = 0; b < M; b++) {
-                    HL.noalias() += LcI(a, b) * C[a].transpose() * C[b];
-                }
-            }
+            MatRM<complex128> HL = get_1body_fock(LcI);
             Eigen::MatrixXcd id = Eigen::MatrixXcd::Identity(dim, dim);
-            MatRM<complex128> HI = kron<complex128>(Hloc.transpose(), id) + kron<complex128>(id, HL);
+            MatRM<complex128> HI = kron<complex128>(Hloc.transpose(), id) + kron<complex128>(id, HL + HL.adjoint());
             // construct HI
             for (int a = 0; a < M; a++) {
                 double b = std::sqrt(nI[a] * (1-nI[a]));
@@ -273,6 +338,41 @@ InitialGuessResult FermionGACPP::compute_initial_guess(
     result.Lc = std::move(Lc);
     result.Ec = std::move(Ec);
     return result;
+}
+
+double FermionGACPP::compute_lagrangian(const InputView& input) const {
+    // diagonalize Hqp and get first Ne energies
+    auto R = compute_renormalizations(input.psiarr, input.n);
+    auto Hqp = compute_Hqp(input.L, R, input.tblock);
+    Eigen::setNbThreads(omp_get_max_threads());
+    Eigen::SelfAdjointEigenSolver<MatRM<complex128>> solver(Hqp);
+    if (solver.info() != Eigen::Success) {
+        throw std::runtime_error("Hqp diagonalization failed");
+    }
+    double Lag = solver.eigenvalues().head(Ne).sum();
+
+    double site_sum = 0.0;
+    Eigen::setNbThreads(1);
+    #pragma omp parallel for reduction(+:site_sum) schedule(static)
+    for (int I = 0; I < N; I++) {
+        auto psi = input.psiarr[I].eigen();
+        auto nI = input.n[I].eigen();
+        auto LI = input.L[I].eigen();
+        auto LcI = input.Lc[I].eigen();
+        const double EcI = input.Ec.eigen()[I];
+
+        auto Hloc = compute_Hloc(input.harr[I], input.Uarr[I]);
+        MatRM<complex128> HL = get_1body_fock(LcI);
+        MatRM<complex128> Hemb_psi = (Hloc * psi) + (psi * (HL + HL.adjoint()));
+        site_sum += std::real(matrix_ip(psi, Hemb_psi));
+        site_sum += EcI * (1.0 - psi.squaredNorm());
+
+        complex128 LmixI = ((LI + LcI).diagonal().array() * nI.array()).sum();
+        site_sum -= 2*std::real(LmixI);
+    }
+    Lag += site_sum;
+
+    return Lag;
 }
 
 void FermionGACPP::compute_gradient(
@@ -324,12 +424,7 @@ void FermionGACPP::compute_gradient(
         auto& gpsi = output.psiarr[I];
         auto Hloc = compute_Hloc(input.harr[I], input.Uarr[I]);
         auto LcI = input.Lc[I].eigen();
-        MatRM<complex128> HL = MatRM<complex128>::Zero(dim, dim);
-        for (int a = 0; a < M; a++) {
-            for (int b = 0; b < M; b++) {
-                HL.noalias() += LcI(a, b) * C[a].transpose() * C[b];
-            }
-        }
+        MatRM<complex128> HL = get_1body_fock(LcI);
         gpsi.noalias() = (Hloc * psi) + (psi * (HL + HL.adjoint()));
         gpsi.noalias() -= EcI*psi;
         for (int a = 0; a < M; a++) {

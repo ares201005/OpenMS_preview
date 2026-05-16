@@ -126,24 +126,58 @@ static py::tuple py_compute_initial_guess(FermionGACPP& self,
     );
 }
 
-static std::vector<MatRM<complex128>> py_compute_renormalizations(FermionGACPP& self,
-        py::sequence seq_psiarr,
-        py::sequence seq_n
+static double py_compute_lagrangian(FermionGACPP& self,
+        py::sequence psiarr,
+        py::sequence L,
+        py::sequence Lc,
+        py::sequence n,
+        py::object Ec_obj,
+        py::sequence harr,
+        py::object tblock_obj,
+        py::sequence Uarr
 ) {
     const py::ssize_t N = self.get_N();
-    std::vector<MatView<complex128>> psiarr;
-    std::vector<VecView<double>> n;
-    psiarr.reserve(N);
-    n.reserve(N);
+
+    // configure input format
+    InputView input;
+    input.psiarr.reserve(N);
+    input.L.reserve(N);
+    input.Lc.reserve(N);
+    input.n.reserve(N);
+    input.harr.reserve(N);
+    input.Uarr.reserve(N);
+
+    // match with output format
+    GradientOutput output(N);
+    
     // match format for input and output data
     for (py::ssize_t I = 0; I < N; I++) {
-        auto psi = require_array<complex128>(seq_psiarr[I]);
-        psiarr.push_back(make_mat_view<complex128>(psi));
-        auto nvec = require_array<double>(seq_n[I]);
-        n.push_back(make_vec_view(nvec));
+        auto psi = require_array<complex128>(psiarr[I]);
+        input.psiarr.push_back(make_mat_view<complex128>(psi));
+
+        auto LM = require_array<complex128>(L[I]);
+        input.L.push_back(make_mat_view<complex128>(LM));
+
+        auto LcM = require_array<complex128>(Lc[I]);
+        input.Lc.push_back(make_mat_view<complex128>(LcM));
+        
+        auto nvec = require_array<double>(n[I]);
+        input.n.push_back(make_vec_view(nvec));
+
+        auto h = require_array<complex128>(harr[I]);
+        input.harr.push_back(make_mat_view<complex128>(h));
+
+        auto U = require_array<complex128>(Uarr[I]);
+        input.Uarr.push_back(make_tensor_view<complex128>(U));
     }
+    auto Ecvec = require_array<double>(Ec_obj);
+    input.Ec = make_vec_view<double>(Ecvec);
+
+    auto tblock = require_array<complex128>(tblock_obj);
+    input.tblock = make_mat_view<complex128>(tblock);
+
     py::gil_scoped_release release;
-    return self.compute_renormalizations(psiarr, n);
+    return self.compute_lagrangian(input);
 }
 
 static py::tuple py_compute_gradient(FermionGACPP& self,
@@ -210,15 +244,67 @@ static py::tuple py_compute_gradient(FermionGACPP& self,
     );
 }
 
+static MatRM<complex128> py_compute_1body_corr(FermionGACPP& self,
+        py::sequence ppsiarr,
+        py::sequence pL,
+        py::sequence pn,
+        py::object tblock_obj
+) {
+    const py::ssize_t N = self.get_N();
+
+    // configure input format
+    std::vector<MatView<complex128>> psiarr;
+    std::vector<MatView<complex128>> L;
+    std::vector<VecView<double>> n;
+    
+    // match format for input and output data
+    for (py::ssize_t I = 0; I < N; I++) {
+        auto psi = require_array<complex128>(ppsiarr[I]);
+        psiarr.push_back(make_mat_view<complex128>(psi));
+
+        auto LM = require_array<complex128>(pL[I]);
+        L.push_back(make_mat_view<complex128>(LM));
+        
+        auto nvec = require_array<double>(pn[I]);
+        n.push_back(make_vec_view(nvec));
+    
+    }
+
+    auto tblock = require_array<complex128>(tblock_obj);
+    auto tblock_view = make_mat_view<complex128>(tblock);
+
+    py::gil_scoped_release release;
+    return self.compute_1body_corr(psiarr, L, n, tblock_view);
+}
+
+struct CdictAccessor {
+    FermionGACPP* parent;
+    std::vector<MatRM<complex128>> getitem(int M) const {
+        return parent->return_Cdict(M);
+    }
+};
+
 PYBIND11_MODULE(_gafermion, m) {
+    m.def("_get_annihilation_operators", &get_annihilation_operators);
+
+    py::class_<CdictAccessor>(m, "_CdictAccessor")
+        .def("__getitem__", &CdictAccessor::getitem);
+
     py::class_<FermionGACPP>(m, "FermionGACPP")
         .def(py::init<std::vector<int>, int>())
         .def_property_readonly("N", &FermionGACPP::get_N)
         .def_property_readonly("Ne", &FermionGACPP::get_Ne)
         .def_property_readonly("M", &FermionGACPP::get_M)
         .def_property_readonly("_Moff", &FermionGACPP::get_Moff)
+        .def_property_readonly(
+            "_Cdict",
+            [](FermionGACPP& self) {
+                return CdictAccessor{&self};
+            }
+        )
 
         .def("_get_initial_guess", &py_compute_initial_guess)
-        .def("_compute_renormalizations", &py_compute_renormalizations)
-        .def("_compute_gradient", &py_compute_gradient);
+        .def("_compute_lagrangian", &py_compute_lagrangian)
+        .def("_compute_gradient", &py_compute_gradient)
+        .def("_compute_1body_corr", &py_compute_1body_corr);
 }
