@@ -669,7 +669,7 @@ class FermionGASCF(ABC):
             super().__init__(mol)
 
             self.conv_tol = 1e-10
-            self.max_cycle = 1000
+            self.max_cycle = 5000
             self._init_guess = '1e'
             self.direct_scf = False
 

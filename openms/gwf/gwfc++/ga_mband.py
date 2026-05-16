@@ -231,7 +231,7 @@ class FermionGASCF(ABC):
             super().__init__(mol)
 
             self.conv_tol = 1e-10
-            self.max_cycle = 1000
+            self.max_cycle = 5000
             self._init_guess = '1e'
             self.direct_scf = False
 
@@ -292,7 +292,7 @@ class FermionGASCF(ABC):
 
         :math:`\bra{\Psi_G} c^\dagger_{Ia} c_{Ib} \ket{\Psi_G} = \text{Tr} \left[ \phi_I^\dagger c^\dagger_a c_b \phi_I  \right]` for each :math:`I`.
         """
-        return self._gacpp._compute_1body_corr(psiarr, L, n, self._tblock)
+        return self._gacpp._compute_1body_correlations(psiarr, L, n, self._tblock)
     
     def _compute_density_renormalizations(self, psiarr, n):
         r"""
@@ -386,6 +386,24 @@ class FermionGASCF(ABC):
         return x, None
     
     def _compute_lagrangian(self, x):
+        r"""
+        Compute
+
+        .. math::
+
+            &\mathcal{L}_e \left(\left\{ \ket{\Psi_I}, n^I, \lambda^I, \lambda_c^I, E_c^I \right\}\right) \\
+            &= \bra{\Psi_0^e} \hat{H}_{qp} \left( \left\{ \ket{\Psi_I}, n^I, \lambda^I \right\} \right) \ket{\Psi_0^e} \\
+            &+ \sum_I \left[\bra{\Psi_I} \hat{H}_{emb}^I \left(  \lambda^I_c \right) \ket{\Psi_I} + E^I_c \left( 1 - \braket{\Psi_I}\right)\right] \\
+            &+ \sum_I \left[ \mathcal{L}^I_{mix} \left( \left\{ \lambda^I, \lambda_c^I, n^I \right\} \right) + c.c. \right]
+
+        where
+
+        .. math::
+
+                \mathcal{L}_{mix}^I = -\displaystyle\sum_{aa} \left(\lambda^I + \lambda_c^I \right)_{aa}n^I_a
+
+        Here, :math:`\ket{\Psi_0^e}` is a Slater determinant of the first ``self.Ne`` single-particle eigenstates of :math:`\hat{H}_{qp}` and is not an independent variable.
+        """
         psiarr, L, Lc, n, Ec = self._unpack_vector(x)
         return self._gacpp._compute_lagrangian(psiarr, L, Lc, n, Ec, self._harr, self._tblock, self._Uarr) 
        
@@ -397,7 +415,7 @@ class FermionGASCF(ABC):
 
             \dfrac{\partial \mathcal{L}_e}{\partial E_c^K} &= 1 - \braket{\Psi_K} \\
             \dfrac{\partial \mathcal{L}_e}{\partial \lambda^K_{ab}} &= \bra{\Psi_0^e} c_{Ka}^\dagger c_{Kb} \ket{\Psi_0^e} - \Delta^K_{ab} \\
-            \dfrac{\partial \mathcal{L}_e}{\partial (\lambda^K_c)_{ab}} &= \bra{\Psi_K} f_b^\dagger f_a \ket{\Psi_K} - \Delta^K_{ab} \\
+            \dfrac{\partial \mathcal{L}_e}{\partial (\lambda^K_c)_{ab}} &= \bra{\Psi_K} f_a^\dagger f_b \ket{\Psi_K} - \Delta^K_{ab} \\
             \dfrac{\partial{\mathcal{L}_e}}{\partial n^K_z} &= 2 \text{Re} \mathcal{A}^K_{zz} \\
             \dfrac{\partial \mathcal{L}_e}{\partial \bra{\Psi_K}} &= \hat{H}^K \ket{\Psi_K}
 
@@ -414,7 +432,7 @@ class FermionGASCF(ABC):
         .. math::
 
             \hat{H}^K &= \hat{H}^K_{emb} - E_c^K \mathbb{I} \\
-            &+ \sum_{\alpha\gamma} \left[ \left[\sum_I \tilde{t}^{{IK}^T} \mathcal{R}^I \Delta^{IK}  {B^K} \right]_{\alpha\gamma} c_\alpha f_\gamma\right] + h.c. \\
+            &+ \sum_{\alpha\gamma} \left[ \left[\sum_I \tilde{t}^{{IK}^T} \mathcal{R}^I \Delta^{IK}  {B^K} \right]_{\alpha\gamma} c_\alpha^\dagger f_\gamma^\dagger \right] + h.c. \\
             
        Here, :math:`B^K` is a diagonal matrix with 
 

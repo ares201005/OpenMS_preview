@@ -55,6 +55,19 @@ std::map<int, std::vector<MatRM<complex128>>> FermionGACPP::get_Cdict() const {
     return Cdict;
 }
 
+static void check_eigen_status(Eigen::ComputationInfo info, std::string identifier) {
+    if (info != Eigen::Success) {
+        std::string msg = identifier + " diagonalization failed: ";
+        if (info == Eigen::NumericalIssue) {
+            throw std::runtime_error(msg + "Numerical issue (e.g., singular matrix)!");
+        } else if (info == Eigen::InvalidInput) {
+            throw std::runtime_error(msg + "Invalid input!");
+        } else if (info == Eigen::NoConvergence) {
+            throw std::runtime_error(msg + "Did not converge!");
+        }
+    }
+}
+
 std::map<int, std::vector<MatRM<complex128>>> FermionGACPP::return_Cdict() const {
     return Cdict_;
 }
@@ -138,9 +151,7 @@ MatRM<complex128> FermionGACPP::compute_qp_corr(
     auto Hqp = compute_Hqp(L, R, tblock);
     Eigen::setNbThreads(omp_get_max_threads());
     Eigen::SelfAdjointEigenSolver<MatRM<complex128>> solver(Hqp);
-    if (solver.info() != Eigen::Success) {
-        throw std::runtime_error("Hqp diagonalization failed");
-    }
+    check_eigen_status(solver.info(), "Hqp");
     const auto& V = solver.eigenvectors();
     auto Vocc = V.leftCols(Ne);
     MatRM<complex128> corr = Vocc.conjugate() * Vocc.transpose();
@@ -153,7 +164,6 @@ MatRM<complex128> FermionGACPP::compute_1body_corr(
     const std::vector<VecView<double>>& n,
     const MatView<complex128>& tblock
 ) const {
-    auto t = tblock.eigen();
     auto R = compute_renormalizations(psiarr, n);
     auto corr = compute_qp_corr(L, R, tblock);
     const int size = Moff_.back();
@@ -170,8 +180,8 @@ MatRM<complex128> FermionGACPP::compute_1body_corr(
             if (I != J) {
                 const int j0 = Moff_[J];
                 const int Mj = Mvec[J];
-                auto tIJ = t.block(i0, j0, Mi, Mj);
-                expcorr.block(i0, j0, Mi, Mj).noalias() = R[I] * tIJ * R[J].adjoint();
+                auto corrIJ = corr.block(i0, j0, Mi, Mj);
+                expcorr.block(i0, j0, Mi, Mj).noalias() = R[I] * corrIJ * R[J].adjoint();
             }
             else {
                 for (int a = 0; a < Mi; a++) {
@@ -319,9 +329,7 @@ InitialGuessResult FermionGACPP::compute_initial_guess(
             }
             // diagonalize and get groundstate
             Eigen::SelfAdjointEigenSolver<MatRM<complex128>> solver(HI);
-            if (solver.info() != Eigen::Success) {
-                throw std::runtime_error("Initial guess HI diagonalization failed");
-            }
+            check_eigen_status(solver.info(), "Initial guess H" + std::to_string(I));
             Ec[I] = solver.eigenvalues()[0];
             auto v0 = solver.eigenvectors().col(0);
             Eigen::Map<const MatRM<complex128>> psi_mat(v0.data(), dim, dim);
@@ -346,9 +354,7 @@ double FermionGACPP::compute_lagrangian(const InputView& input) const {
     auto Hqp = compute_Hqp(input.L, R, input.tblock);
     Eigen::setNbThreads(omp_get_max_threads());
     Eigen::SelfAdjointEigenSolver<MatRM<complex128>> solver(Hqp);
-    if (solver.info() != Eigen::Success) {
-        throw std::runtime_error("Hqp diagonalization failed");
-    }
+    check_eigen_status(solver.info(), "Hqp");
     double Lag = solver.eigenvalues().head(Ne).sum();
 
     double site_sum = 0.0;
@@ -450,12 +456,4 @@ void FermionGACPP::compute_gradient(
             gn[z] = 2.0 * std::real(An(z,z));
         }
     }
-
-    // for (int I = 0; I < N; ++I) {
-    //     output.psiarr[I].eigen() = output.psiarr[I];
-    //     output.L[I].eigen() = output.L[I];
-    //     output.Lc[I].eigen() = output.Lc[I];
-    //     output.n[I].eigen() = output.n[I];
-    //     output.Ec[I] = output.Ec[I];
-    // }
 }

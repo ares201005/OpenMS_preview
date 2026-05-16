@@ -306,5 +306,5 @@ PYBIND11_MODULE(_gafermion, m) {
         .def("_get_initial_guess", &py_compute_initial_guess)
         .def("_compute_lagrangian", &py_compute_lagrangian)
         .def("_compute_gradient", &py_compute_gradient)
-        .def("_compute_1body_corr", &py_compute_1body_corr);
+        .def("_compute_1body_correlations", &py_compute_1body_corr);
 }
