@@ -447,6 +447,14 @@ class FermionGASCF(ABC):
         g = lambda grad: [2*G for G in grad]
         return self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), grad_n, grad_Ec)
     
+    def _compute_truncated_gradient(self, x, truncate=1e-8):
+        psiarr, L, Lc, n, Ec = self._unpack_vector(x)
+        narr = [np.array([min(max(truncate, nI), 1-truncate) for nI in n[I]]) for I in range(self.N)]
+        grad_psiarr, grad_L, grad_Lc, grad_n, grad_Ec = self._gacpp._compute_gradient(psiarr, L, Lc, narr, Ec, self._harr, self._tblock, self._Uarr)
+        f = lambda grad: [2*G.conj() for G in grad]
+        g = lambda grad: [2*G for G in grad]
+        return self._pack_vector(g(grad_psiarr), f(grad_L), f(grad_Lc), grad_n, grad_Ec)
+    
     def kernel(
         self,
         method="krylov",

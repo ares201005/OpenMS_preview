@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from ga_mband import FermionGASCF
 
 class FermiHubbard(FermionGASCF):
-    def __init__(self, n=4, filling=0.5, U=2.0, t=-1.0, J=0.0, PBC=True):
+    def __init__(self, n=4, filling=0.5, U=2.0, t=-1.0, J=0.001, PBC=True):
         if (n <= 0):
             raise ValueError("lattice size must be positive")
         if ((filling <= 0) or (filling >= 1)):
