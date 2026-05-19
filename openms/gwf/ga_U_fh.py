@@ -13,7 +13,12 @@ class FermiHubbardScanner(FermiHubbard):
             dim = 2 if ('2d' in FermiHubbard.__module__) else 1
             print(f"{dim}D ", end="")
         msg = re.sub(r',?\s*U=[^,]+', '', self.msg)
-        return super().kernel(verbose=verbose, **kwargs)
+        figname = "results/EU_"
+        if ('2d' in FermiHubbard.__module__):
+            figname += f"n{self.n}.png"
+        else:
+            figname += f"N{self.N}.png"
+        return super().kernel(verbose=verbose, **kwargs), figname
 
 def get_res(U, x0):
     hf = (x0 is None)
@@ -47,7 +52,7 @@ def main():
     Earr = []
     x0 = None
     for U in np.arange(init_U, max_U, step):
-        res = get_res(U, x0)
+        res, figname = get_res(U, x0)
         E = res.E
         Uarr.append(U)
         Earr.append(E)
@@ -87,6 +92,7 @@ def main():
 
     plt.suptitle(msg)
     plt.tight_layout()
+    plt.savefig(figname)
     plt.show()
 
 
